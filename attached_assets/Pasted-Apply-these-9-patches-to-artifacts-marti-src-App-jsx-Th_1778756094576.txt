@@ -1,0 +1,71 @@
+Apply these 9 patches to artifacts/marti/src/App.jsx. This is v7.1 — a polish 
+pass on bugs I identified from mobile screenshots across SIM/PAPER/LIVE modes.
+Bump the version pill from "v7" to "v7.1" while you're in there.
+
+Do NOT regenerate, refactor, or rewrite the file. Apply targeted edits only. 
+Preserve all existing structure, function names, CSS class names, the inline 
+styles template literal, the LOGO_DATA_URI base64 constant, and the 
+window.claude.complete demo stub.
+
+PATCH 1 — Scenario Performance Net P&L column overlap on mobile
+The Net P&L cell in the Scenario Performance table shows two values stacking 
+on narrow widths (e.g. "-$65.1k" overlapping "-$2.90$2.28k"). Find the 
+.mb-scenario-row or equivalent class and ensure the Net P&L column has 
+sufficient min-width and proper text-align: right at mobile breakpoints. 
+Add a media query (max-width: 480px) that gives the Net P&L column at least 
+80px of width and prevents text wrapping with white-space: nowrap.
+
+PATCH 2 — Win prob slider label stacking
+On mobile (<480px), the slider's helper text "Coin flip / Casino / Sharp / 
+Elite" labels are overlapping with the parameter input labels below 
+(rendering as "CoStartPling lite"). Find the slider tick marks/labels 
+container and fix the flex layout — they should collapse cleanly, not 
+overlap the next row.
+
+PATCH 3 — Mode-aware narrative copy
+The Marty Says / Plain English narrative panel has hardcoded "simulation" 
+strings. Replace each one with mode-aware text:
+  mode === 'sim'    → "simulation"
+  mode === 'paper'  → "paper trading run"
+  mode === 'live'   → "live trading run"
+Search the file for hardcoded "simulation" inside JSX template strings 
+inside the MartySays component and the buildAskMartySystemPrompt function.
+
+PATCH 4 — Mode-aware Ask Marti starter questions
+Same fix in the AskMartyView starters array. The "Period & data" starter 
+currently says "What period does this simulation cover?" — make the noun 
+mode-aware.
+
+PATCH 5 — Rename "Top Performer" to "Best Alternative" with signed delta
+In the Insights view, the "TOP PERFORMER" insight card can show a negative 
+"vs current" value (when the current run got lucky and outperforms the 
+58% synthetic). Rename the card label to "BEST ALTERNATIVE" and ensure the 
+"vs current" delta renders with proper sign — positive in forest green, 
+negative in oxblood.
+
+PATCH 6 — Outcome Distribution bar coloring
+The Outcome Distribution histogram in Workspace view shows the last bar 
+in red regardless of content. Only color a bar red if it represents loss 
+sequences (step count equal to N_max with status === 'cap'). All other 
+bars should use the same forest-green ramp.
+
+PATCH 7 — Today's P&L tile color
+In the Money Tiles strip, the "Today's P&L" tile uses gold for positive 
+values. Change it so only "Lifetime P&L" and "This Month" use gold for 
+positives. Today's P&L should use standard forest-green for positive, 
+oxblood for negative. Gold is reserved for the headline figures.
+
+PATCH 8 — Scenario Performance sort order
+The Scenario Performance rows currently render in the order they were 
+generated (58, 54, 56, 51, 52, 50, 48). Sort the array ascending by edge 
+value before mapping: 48, 50, 51, 52, 54, 56, 58. Keep the "CURRENT" 
+highlight on whichever row matches current p.
+
+PATCH 9 — Status indicator copy
+The top-bar status pill says "IDLE" all the time. Change to:
+  running === true   → "RUNNING" (keep current behavior)
+  running === false AND results exists → "READY"
+  running === false AND results === null → "IDLE"
+
+After patching, run the dev server and verify it builds cleanly. Report 
+which lines changed and confirm the version pill now says v7.1.

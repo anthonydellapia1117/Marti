@@ -487,7 +487,7 @@ return () => window.removeEventListener('keydown', handler);
 return (
 <div className="mb-root">
 <style>{styles}</style>
-<TopBar now={now} runCount={runCount} running={running} num={num} mode={mode} />
+<TopBar now={now} runCount={runCount} running={running} num={num} mode={mode} results={results} />
 <OperatingStatusBar mode={mode} setMode={setMode} market={market} />
 <div className="mb-tabs-top">
 <TabSwitch view={view} setView={setView} />
@@ -576,18 +576,18 @@ return (
 // TOP BAR
 // ============================================================
 
-function TopBar({ now, runCount, running, num, mode }) {
+function TopBar({ now, runCount, running, num, mode, results }) {
 const currentMode = MODES.find(x => x.id === mode);
 return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v7</span>
+<span className="mb-brand-ver mono">v7.1</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
 <span className={`mb-status-dot ${running ? 'mb-status-dot-live' : ''}`}></span>
-<span className="mono">{running ? 'RUNNING' : 'IDLE'}</span>
+<span className="mono">{running ? 'RUNNING' : (results ? 'READY' : 'IDLE')}</span>
 </div>
 <div className="mb-meta mono mb-meta-hide-sm">
 <span>R{runCount.toString().padStart(2, '0')}</span>
@@ -766,7 +766,7 @@ return (
     <p className="mb-msays-p">
       Each martingale step = one <strong>{mkt?.intervalLong}</strong>. With{' '}
       <strong className="mono">{mkt?.intervalsPerDay}</strong> {mkt?.intervalShort}s per day on{' '}
-      <strong>{mkt?.label}</strong>, this simulation covers{' '}
+      <strong>{mkt?.label}</strong>, this {mode === 'paper' ? 'paper trading run' : mode === 'live' ? 'live trading run' : 'simulation'} covers{' '}
       <strong className="mono">{fmtDateShort(period.startDate)}</strong> to{' '}
       <strong className="mono">{fmtDateShort(period.endDate)}</strong>{' '}
       (<strong>{fmtDurationShort(period.totalDays)}</strong>) via <strong>{feed?.feed}</strong>.
@@ -823,7 +823,7 @@ label: "TODAY'S P&L",
 value: fmtMoney(moneyBreakdown.today?.pnl || 0, 0),
 positive: (moneyBreakdown.today?.pnl || 0) >= 0,
 primary: true,
-gold: (moneyBreakdown.today?.pnl || 0) >= 0,
+gold: false,
 meta: moneyBreakdown.today
 ? `${moneyBreakdown.today.count} seq · ${moneyBreakdown.today.wins}W / ${moneyBreakdown.today.caps}C`
 : 'no activity',
@@ -1261,7 +1261,7 @@ handleSend();
 
 const starters = [
 { label: 'Explain the edge', q: `Explain my current ${(p*100).toFixed(0)}% edge in plain English. Is it good? What does it mean in practice?` },
-{ label: 'Period & data', q: 'What period does this simulation cover? Which market and data feed?' },
+{ label: 'Period & data', q: `What period does this ${mode === 'paper' ? 'paper trading run' : mode === 'live' ? 'live trading run' : 'simulation'} cover? Which market and data feed?` },
 { label: 'Worst case math', q: 'What is my worst-case loss per sequence? How often does it happen?' },
 { label: 'Daily breakdown', q: 'How did I do today and this month? Best and worst day?' },
 { label: 'Sim vs Live', q: 'Am I in simulation or live mode? What does that mean for these numbers?' },
@@ -1448,7 +1448,7 @@ SIMULATION RESULTS:
 - Max bet ever hit: $${fmt2(ctx.results?.maxBetEver)}
 - Avg profit per sequence: $${ctx.results?.avgPerSeq?.toFixed(4)}
 
-PERIOD (the dates this simulation covers):
+PERIOD (the dates this ${ctx.mode === 'PAPER' ? 'paper trading run' : ctx.mode === 'LIVE' ? 'live trading run' : 'simulation'} covers):
 ${ctx.period ? `- Start: ${ctx.period.startDate?.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
 
 - End: ${ctx.period.endDate?.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
@@ -1647,7 +1647,7 @@ function OverviewView({ results, scenarios, p, b0, m, N_max, num, breakevenP, pe
 const [expanded, setExpanded] = useState(null);
 if (!results || !scenarios) return <LoadingPanel />;
 
-const sortedScens = [...scenarios].sort((a, b) => b.finalProfit - a.finalProfit);
+const sortedScens = [...scenarios].sort((a, b) => a.p - b.p);
 
 return (
 <div className="mb-view">
@@ -1863,7 +1863,7 @@ num={num}
             <Tooltip content={<ChartTooltip labelPrefix="Step " />} />
             <Bar dataKey="count" radius={[2, 2, 0, 0]}>
               {results.lengthDist.map((d, i) => (
-                <Cell key={i} fill={d.isCap ? '#c44545' : '#3d6e52'} />
+                <Cell key={i} fill={(d.isCap && d.count > 0) ? '#c44545' : '#3d6e52'} />
               ))}
             </Bar>
           </BarChart>
@@ -2131,7 +2131,7 @@ exportState={exportState}
             <Tooltip content={<ChartTooltip labelPrefix="Step " />} />
             <Bar dataKey="count" radius={[2, 2, 0, 0]}>
               {results.lengthDist.map((d, i) => (
-                <Cell key={i} fill={d.isCap ? '#c44545' : '#3d6e52'} />
+                <Cell key={i} fill={(d.isCap && d.count > 0) ? '#c44545' : '#3d6e52'} />
               ))}
             </Bar>
           </BarChart>
@@ -2278,14 +2278,14 @@ rows: [
 ]
 },
 {
-title: 'TOP PERFORMER',
+title: 'BEST ALTERNATIVE',
 headline: `${(best.p * 100).toFixed(0)}% edge`,
 headlineColor: 'teal',
 rows: [
-['Net P&L', fmtMoney(best.finalProfit, 0), 'pos'],
+['Net P&L', fmtMoney(best.finalProfit, 0), best.finalProfit >= 0 ? 'pos' : 'neg'],
 ['Cap rate', `${(best.capRate * 100).toFixed(3)}%`],
 ['Win rate', `${(best.winRate * 100).toFixed(2)}%`],
-['vs current', best.p === p ? 'Active' : fmtMoney(best.finalProfit - results.finalProfit, 0), best.p === p ? 'teal' : 'pos']
+['vs current', best.p === p ? 'Active' : fmtMoney(best.finalProfit - results.finalProfit, 0), best.p === p ? 'teal' : ((best.finalProfit - results.finalProfit) >= 0 ? 'pos' : 'neg')]
 ]
 },
 {
@@ -2916,6 +2916,17 @@ padding-left: 10px; padding-right: 10px;
 }
 .mb-th-hide-sm, .mb-td-hide-sm { display: none; }
 }
+@media (max-width: 480px) {
+.mb-table-head, .mb-tr {
+grid-template-columns: 1.4fr 0.6fr 90px 20px;
+gap: 4px;
+}
+.mb-th-pnl, .mb-td-pnl {
+min-width: 80px;
+white-space: nowrap;
+text-align: right;
+}
+}
 
 .mb-tr-detail {
 background: var(--bg);
@@ -3429,6 +3440,11 @@ display: flex;
 align-items: center;
 gap: 8px;
 margin-top: 6px;
+padding-bottom: 16px;
+}
+@media (max-width: 480px) {
+.mb-edgemeter { padding-bottom: 18px; }
+.mb-edgemeter-ticklabel { font-size: 8px; }
 }
 .mb-edgemeter-track {
 position: relative;
