@@ -491,6 +491,8 @@ const [autoSeed, setAutoSeed] = useState(0);
 const [dataError, setDataError] = useState(null);
 const [dataInfo, setDataInfo] = useState(null);
 const [lowVolume, setLowVolume] = useState(false);
+const [lastRunAt, setLastRunAt] = useState(null);
+const [justRefreshed, setJustRefreshed] = useState(false);
 
 useEffect(() => {
 const t = setInterval(() => setNow(new Date()), 1000);
@@ -545,12 +547,18 @@ observedWinRate: obsP
 setLowVolume(market === 'mlb' && payload.outcomes.length < 100);
 }
 setRunCount(c => c + 1);
+setLastRunAt(Date.now());
+setJustRefreshed(true);
+setTimeout(() => setJustRefreshed(false), 1100);
 } catch (err) {
 setDataError(err && err.message ? err.message : String(err));
 } finally {
 setRunning(false);
 }
 }, [p, b0, m, N_max, num, market]);
+
+// Stale = displaying data for a different market than currently selected
+const isStale = !!(dataInfo?.source === 'real' && dataInfo.market && dataInfo.market !== market);
 
 useEffect(() => {
 handleRun();
@@ -563,7 +571,9 @@ const t = setInterval(() => setAutoSeed(s => s + 1), 60000);
 return () => clearInterval(t);
 }, []);
 useEffect(() => {
-if (autoSeed > 0) handleRun();
+// v8.1: don't auto-refresh after a market switch (could be expensive).
+// User must click Run to load the new market.
+if (autoSeed > 0 && !isStale) handleRun();
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [autoSeed]);
 
@@ -660,7 +670,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v8',
+version: 'v8.1',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -734,9 +744,13 @@ return (
     market={market}
     onRetry={() => handleRun({ force: true })}
     running={running}
+    isStale={isStale}
+    justRefreshed={justRefreshed}
+    lastRunAt={lastRunAt}
+    now={now}
   />
 
-  <div className="mb-stage">
+  <div className={`mb-stage ${isStale ? 'mb-stage-stale' : ''}`}>
     {view === 'overview' && (
       <OverviewView
         results={results}
@@ -819,7 +833,34 @@ return (
 // TOP BAR
 // ============================================================
 
-function DataBanner({ dataError, dataInfo, lowVolume, market, onRetry, running }) {
+function fmtAgo(ms, nowMs) {
+if (!ms) return '—';
+const diffSec = Math.max(0, Math.floor((nowMs - ms) / 1000));
+if (diffSec < 5) return 'just now';
+if (diffSec < 60) return `${diffSec}s ago`;
+const min = Math.floor(diffSec / 60);
+if (min < 60) return `${min} min ago`;
+const h = Math.floor(min / 60);
+if (h < 24) return `${h}h ago`;
+const d = Math.floor(h / 24);
+return `${d}d ago`;
+}
+
+function DataBanner({ dataError, dataInfo, lowVolume, market, onRetry, running, isStale, justRefreshed, lastRunAt, now }) {
+const mkt = MARKETS.find(x => x.id === market);
+const nowMs = now ? now.getTime() : Date.now();
+
+if (isStale) {
+return (
+<div className="mb-databanner mb-databanner-warn">
+<span className="mb-databanner-tag mono">STALE</span>
+<span className="mb-databanner-msg">
+⚠ Stale data from previous market. Click <strong>Run</strong> to load <strong>{mkt?.label ?? market}</strong> data.
+</span>
+<button onClick={onRetry} disabled={running} className="mb-databanner-btn mono">Run now</button>
+</div>
+);
+}
 if (dataError) {
 return (
 <div className="mb-databanner mb-databanner-err">
@@ -831,28 +872,29 @@ return (
 }
 if (lowVolume && market === 'mlb') {
 return (
-<div className="mb-databanner mb-databanner-warn">
+<div className={`mb-databanner mb-databanner-warn ${justRefreshed ? 'mb-databanner-pulse' : ''}`}>
 <span className="mb-databanner-tag mono">MLB OFF-SEASON</span>
 <span className="mb-databanner-msg">
 Only {dataInfo?.eventCount ?? 0} half-inning outcomes returned in the last 180 days.
 MLB regular season runs late March through early October — results are thin outside that window. Stats may be noisy.
 </span>
+<span className="mb-databanner-age mono dim">last run: {fmtAgo(lastRunAt, nowMs)}</span>
 </div>
 );
 }
 if (dataInfo?.source === 'real') {
 const startStr = dataInfo.feedStart ? new Date(dataInfo.feedStart).toLocaleDateString() : '—';
 const endStr = dataInfo.feedEnd ? new Date(dataInfo.feedEnd).toLocaleDateString() : '—';
-const ageMin = dataInfo.fetchedAt ? Math.round((Date.now() - dataInfo.fetchedAt) / 60000) : 0;
 return (
-<div className="mb-databanner mb-databanner-ok">
+<div className={`mb-databanner mb-databanner-ok ${justRefreshed ? 'mb-databanner-pulse' : ''}`}>
 <span className="mb-databanner-tag mono">REAL DATA</span>
 <span className="mb-databanner-msg">
 {dataInfo.eventCount.toLocaleString()} outcomes · {dataInfo.sequenceCount?.toLocaleString() ?? '—'} sequences ·
 {' '}{startStr} → {endStr} ·
 {' '}observed win rate <span className="mono">{(dataInfo.observedWinRate * 100).toFixed(2)}%</span>
-{dataInfo.cached ? ` · cached ${ageMin}m ago` : ' · fresh fetch'}
+{dataInfo.cached ? ' · from cache' : ' · fresh fetch'}
 </span>
+<span className="mb-databanner-age mono dim">last run: {fmtAgo(lastRunAt, nowMs)}</span>
 </div>
 );
 }
@@ -865,7 +907,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v8</span>
+<span className="mb-brand-ver mono">v8.1</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -2301,11 +2343,16 @@ exportState={exportState}
       />
     </ParamControl>
     <div className="mb-param-actions">
-      <button onClick={() => onRun()} disabled={running} className="mb-runbtn">
+      <button
+        onClick={() => onRun()}
+        disabled={running}
+        className={`mb-runbtn ${running ? 'mb-runbtn-running' : ''}`}
+        aria-busy={running}
+      >
         {running ? (
           <>
             <span className="mb-spinner"></span>
-            <span>RUN</span>
+            <span>Running…</span>
           </>
         ) : (
           <>
@@ -3437,6 +3484,35 @@ transition: background 0.15s;
 background: var(--border);
 color: var(--dim);
 cursor: not-allowed;
+}
+.mb-runbtn-running:disabled {
+background: linear-gradient(90deg, #1c8a76 0%, #34d4b6 50%, #1c8a76 100%);
+background-size: 200% 100%;
+color: var(--bg);
+cursor: wait;
+animation: mb-runbtn-breath 2s ease-in-out infinite;
+}
+@keyframes mb-runbtn-breath {
+0% { background-position: 0% 50%; }
+50% { background-position: 100% 50%; }
+100% { background-position: 0% 50%; }
+}
+.mb-databanner-pulse {
+animation: mb-databanner-pulse 1.1s ease-out 1;
+}
+@keyframes mb-databanner-pulse {
+0% { box-shadow: inset 0 0 0 0 rgba(199, 162, 107, 0.0); background-color: rgba(199, 162, 107, 0.22); }
+40% { background-color: rgba(199, 162, 107, 0.16); }
+100% { background-color: inherit; }
+}
+.mb-databanner-age { margin-left: auto; font-size: 10px; opacity: 0.7; }
+.mb-stage-stale .mb-card,
+.mb-stage-stale .mb-kpi,
+.mb-stage-stale .mb-cardgrid,
+.mb-stage-stale .mb-insights {
+opacity: 0.6;
+transition: opacity 0.2s ease;
+filter: saturate(0.7);
 }
 
 .mb-spinner {
