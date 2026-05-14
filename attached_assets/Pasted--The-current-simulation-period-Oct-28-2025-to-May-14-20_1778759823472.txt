@@ -1,0 +1,51 @@
+. 
+The current simulation period (Oct 28, 2025 to May 14, 2026) covers 
+mostly off-season plus the first ~6 weeks of the 2026 season.
+
+When the MLB market is selected:
+- If the date range has < 100 inning events, show a banner:
+  "Limited MLB data in this period (X events). Consider switching 
+  to BTC or SPX for higher-volume markets."
+- Don't crash or fall back to synthetic data
+
+============================================================
+VERSION + VERIFICATION
+============================================================
+
+- Bump version pill: v7.1 → v8
+- All three modes (SIM/PAPER/LIVE) now load the SAME real data 
+  (Coinbase BTC = Coinbase BTC, no difference). The three modes are 
+  no longer different RNG seeds.
+- Instead, the three modes represent different deployment STAGES of 
+  the same real data:
+    SIM = the backtest result (what would have happened)
+    PAPER = the same backtest, framed as "paper trading"
+    LIVE = the same backtest, framed as "live trading"
+  In all three modes the numbers and outcomes are identical and real.
+  The mode toggle now changes only the framing copy.
+  
+- Verify:
+  1. Build is clean (pnpm run build)
+  2. Dev server starts (pnpm run dev)
+  3. Open http://localhost:5173, click Run with BTC selected
+  4. Confirm Network tab shows requests to /api/btc/candles
+  5. Confirm KPIs change to match real BTC outcomes
+  6. Switch market to SPX, click Run, confirm SPX data loads
+  7. Switch market to MLB, click Run, confirm MLB data loads 
+     (or shows the low-volume banner)
+  8. Open Ask Marti, ask "Explain my current edge"
+  9. Confirm a real Claude response appears (not the canned stub)
+  10. Confirm version pill says v8
+
+============================================================
+RULES
+============================================================
+
+1. NO synthetic data anywhere. If a feed fails, show an error.
+2. NO Math.random() in the outcome generation (still OK for UI animations).
+3. NO hardcoded API keys. Read from env vars only.
+4. NO regenerating the file. Targeted edits to existing structure only.
+5. If any API key is missing from secrets, halt and tell Anthony 
+   which secret to add. Do not insert placeholder keys.
+6. Report which lines changed, which files were created, and which 
+   env vars are required

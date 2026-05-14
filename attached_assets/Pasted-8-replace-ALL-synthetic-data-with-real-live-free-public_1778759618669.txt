@@ -1,0 +1,66 @@
+8: replace ALL synthetic data with real, live, free public APIs.
+ZERO synthetic data anywhere. If a feed fails, show an error state - 
+never fall back to Math.random() or stipulated values.
+
+============================================================
+SCOPE
+============================================================
+
+This is a full v8 rewrite of the data layer in artifacts/marti/src/App.jsx.
+Replace the synthetic simulator with real market data for all three 
+markets. Wire Ask Marti to the real Anthropic API. Fix the slider label 
+overlap on mobile.
+
+DO NOT remove or refactor:
+- The three-mode toggle (SIM/PAPER/LIVE) and its mode-aware copy
+- The Premium Executive color palette (forest green, champagne gold, oxblood)
+- The four tabs (Overview, Workspace, Insights, Ask Marti)
+- The existing KPI tile layout and styling
+- The base44/v7.1 patches already in place
+- The LOGO_DATA_URI constant for the MARTi wordmark
+
+============================================================
+NEW BACKEND: tiny Express proxy
+============================================================
+
+The workspace already has Express scaffolding in lib/. Create a minimal 
+proxy server at artifacts/marti/server/index.ts that:
+
+1. Serves the React app in production
+2. Provides these endpoints:
+
+   GET /api/btc/candles?start=ISO&end=ISO&granularity=900
+     - Proxies to: https://api.exchange.coinbase.com/products/BTC-USD/candles
+     - Coinbase returns 300 candles per request - implement pagination
+     - Aggregate and return as JSON array of {time, open, close, outcome}
+       where outcome = "up" if close > open, "down" otherwise
+     - Cache aggressively (Coinbase data is immutable for closed candles)
+   
+   GET /api/spx/candles?start=ISO&end=ISO&interval=1h
+     - Proxies to: https://api.twelvedata.com/time_series
+     - Requires TWELVEDATA_API_KEY env var (halt with clear error if missing)
+     - Symbol: SPX, interval: 1h, outputsize: 5000
+     - Return same shape as BTC endpoint
+   
+   GET /api/mlb/events?start=ISO&end=ISO
+     - Proxies to: https://statsapi.mlb.com/api/v1/schedule
+     - sportId=1, hydrate=linescore
+     - For each game, extract half-innings from linescore.innings[]
+     - For each half-inning, emit one binary event:
+       outcome = "yes" if runs > 0 (team scored), "no" if runs == 0
+     - Return as JSON array of {time, gameId, inning, half, team, outcome}
+   
+   POST /api/ask-marti
+     - Body: { messages: [{role, content}], context: {...} }
+     - Requires ANTHROPIC_API_KEY env var (halt with clear error if missing)
+     - Calls Anthropic Messages API:
+       POST https://api.anthropic.com/v1/messages
+       model: "claude-sonnet-4-5"
+       max_tokens: 1024
+     - System prompt: build from the existing buildAskMartySystemPrompt 
+       function (preserve it - just pipe it to the real API now)
+     - Stream response back to client
+     - Handle rate limit and 5xx errors gracefully
+
+3. Run on port 5000 (matches the existing .replit config workflow)
+4. In dev: Vite proxy /api requests from 5173 to 5000
