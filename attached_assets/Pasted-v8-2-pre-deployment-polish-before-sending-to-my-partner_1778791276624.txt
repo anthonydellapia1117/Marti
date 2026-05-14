@@ -1,0 +1,154 @@
+v8.2: pre-deployment polish before sending to my partner Pete. 
+Four targeted additions plus replit.md cleanup. No structural changes.
+
+============================================================
+PATCH 1: SPX market structure disclosure
+============================================================
+
+The SPX market uses TwelveData's SPY ETF as a 1:1 directional 
+proxy because TwelveData's free tier doesn't include the SPX 
+index. This is the correct call for testing direction, but 
+users need to understand the distinction from real prediction 
+markets.
+
+When the SPX market is selected, add a disclosure block. Place 
+it inside the Edge Classification or SimulatedPeriod card on 
+the Workspace view:
+
+"SPX market uses SPY ETF as a 1:1 directional proxy for the 
+S&P 500. Real prediction markets (e.g. IBKR ForecastTrader, 
+Kalshi) may have non-parity contract pricing and slippage that 
+affect realized P&L. This dashboard tests pure market direction; 
+market structure costs are not modeled."
+
+Style: muted text (--dim color), italic, smaller font (~12px). 
+Reads like a footnote. Only appears for SPX market selection.
+
+============================================================
+PATCH 2: Sample size warning for low-volume markets
+============================================================
+
+When outcome count < 1000, add a "LIMITED SAMPLE" chip next 
+to the outcome count in the REAL DATA banner.
+
+Display: "852 outcomes [LIMITED SAMPLE] · 462 sequences · ..."
+
+Where [LIMITED SAMPLE] is a small chip in champagne gold 
+(--gold-bright) styled like the existing THIN EDGE / SHARP 
+chips. On click/hover, show tooltip:
+
+"Sample size below 1,000 outcomes. Observed win rate may 
+regress toward 50% with more data. Treat findings as 
+directional, not definitive."
+
+Threshold: outcomes < 1000 triggers the chip.
+
+============================================================
+PATCH 3: MLB direction explainer
+============================================================
+
+When MLB market is selected AND observed win rate is below 
+40% (current bot strategy is wrong-direction), add an 
+informational banner above the data banner:
+
+"⚠ Bot strategy is currently set to 'YES (will score)'. 
+MLB innings score only ~28% of the time, so the strategy 
+loses. The same data with bot betting 'NO score' would 
+show a ~72% win rate. Bot direction selector coming in v9."
+
+Style: amber/champagne gold border, --s2 background, normal 
+text size. Distinct from the regular banner. Only appears 
+when market === 'mlb' AND observedWinRate < 0.40.
+
+============================================================
+PATCH 4: Disclaimer footer
+============================================================
+
+Add a small disclaimer footer below the bottom tab navigation. 
+Should be present on all four tabs (Overview, Workspace, 
+Insights, Ask Marti).
+
+Text:
+
+"Marti is a strategy simulation tool. Results reflect 
+historical market data and do not predict future performance. 
+Not investment advice. Real prediction market trading involves 
+costs (slippage, fees, non-parity pricing) not modeled here. 
+Always verify findings against independent data before 
+deploying capital."
+
+Style: very small text (~10-11px), --dim color, centered, 
+single line if width allows, wraps gracefully on mobile. 
+Should be present but not visually competitive with the app 
+chrome.
+
+============================================================
+PATCH 5: Customize replit.md
+============================================================
+
+Replace the current Express 5 + PostgreSQL stub content with 
+the following Marti-specific description:
+
+---
+
+# Marti
+
+A strategy simulation tool for binary-outcome markets using a 
+modified martingale approach with cap-at-N risk control. Tests 
+the strategy against real historical market data across three 
+markets:
+
+- **BTC 15m direction** (Coinbase Exchange, keyless)
+- **SPX 1H direction** via SPY ETF as 1:1 directional proxy 
+  (TwelveData, free tier)
+- **MLB inning scoring** (MLB StatsAPI, keyless)
+
+Three operational modes preview deployment stages, all loading 
+identical real data with different framing copy:
+
+- `SIMULATION`: backtest preview
+- `PAPER`: paper trading preview  
+- `LIVE`: live trading preview
+
+Includes an integrated AI assistant ("Marti") powered by 
+Anthropic Claude via Replit's AI integration proxy. Provides 
+natural-language analysis of simulation results, edge 
+classification, and risk math.
+
+## Stack
+
+- React 19.1 + Vite 7 + Tailwind CSS 4
+- Express 5 backend at `artifacts/api-server` exposing four 
+  real-data endpoints
+- pnpm workspace monorepo
+- 6-hour localStorage cache for fetched market data
+- TypeScript + JSX hybrid
+
+## Endpoints
+
+| Endpoint | Source | Auth |
+|----------|--------|------|
+| GET /api/btc/candles | Coinbase Exchange | None |
+| GET /api/spx/candles | TwelveData (SPY proxy) | TWELVEDATA_API_KEY |
+| GET /api/mlb/events | MLB StatsAPI | None |
+| POST /api/ask-marti | Anthropic Claude via Replit proxy | Built-in |
+
+## Development
+
+Built collaboratively by Anthony DellaPia with Replit Agent. 
+Designed for use as a strategy validation tool ahead of live 
+deployment via separate execution layer (IBKR ForecastTrader / 
+Kalshi).
+
+---
+
+============================================================
+RULES
+============================================================
+
+1. No structural changes. These are additive UI/copy patches only.
+2. Don't regenerate App.jsx. Targeted edits only.
+3. Bump version pill: v8.1 → v8.2 in both brand pill and 
+   exportState payload.
+4. Verify typecheck and build are clean.
+5. Report which files changed and confirm v8.2 in version pill

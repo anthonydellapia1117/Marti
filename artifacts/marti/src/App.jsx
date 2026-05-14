@@ -670,7 +670,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v8.1',
+version: 'v8.2',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -736,6 +736,15 @@ return (
 <div className="mb-tabs-top">
 <TabSwitch view={view} setView={setView} />
 </div>
+
+  {market === 'mlb' && dataInfo?.observedWinRate != null && dataInfo.observedWinRate < 0.40 && !isStale && (
+    <div className="mb-mlbdir-banner">
+      <span className="mb-mlbdir-tag mono">MLB DIRECTION</span>
+      <span className="mb-mlbdir-msg">
+        ⚠ Bot strategy is currently set to <strong>"YES (will score)"</strong>. MLB innings score only ~28% of the time, so the strategy loses. The same data with bot betting <strong>"NO score"</strong> would show a ~72% win rate. Bot direction selector coming in v9.
+      </span>
+    </div>
+  )}
 
   <DataBanner
     dataError={dataError}
@@ -824,6 +833,11 @@ return (
   </div>
 
   <BottomNav view={view} setView={setView} />
+  <footer className="mb-disclaimer">
+    Marti is a strategy simulation tool. Results reflect historical market data and do not predict future performance.
+    Not investment advice. Real prediction market trading involves costs (slippage, fees, non-parity pricing) not modeled here.
+    Always verify findings against independent data before deploying capital.
+  </footer>
 </div>
 
 );
@@ -889,7 +903,14 @@ return (
 <div className={`mb-databanner mb-databanner-ok ${justRefreshed ? 'mb-databanner-pulse' : ''}`}>
 <span className="mb-databanner-tag mono">REAL DATA</span>
 <span className="mb-databanner-msg">
-{dataInfo.eventCount.toLocaleString()} outcomes · {dataInfo.sequenceCount?.toLocaleString() ?? '—'} sequences ·
+{dataInfo.eventCount.toLocaleString()} outcomes
+{dataInfo.eventCount < 1000 && (
+<span
+className="mb-sample-chip mono"
+title="Sample size below 1,000 outcomes. Observed win rate may regress toward 50% with more data. Treat findings as directional, not definitive."
+> LIMITED SAMPLE</span>
+)}
+{' '}· {dataInfo.sequenceCount?.toLocaleString() ?? '—'} sequences ·
 {' '}{startStr} → {endStr} ·
 {' '}observed win rate <span className="mono">{(dataInfo.observedWinRate * 100).toFixed(2)}%</span>
 {dataInfo.cached ? ' · from cache' : ' · fresh fetch'}
@@ -907,7 +928,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v8.1</span>
+<span className="mb-brand-ver mono">v8.2</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -2278,6 +2299,13 @@ exportState={exportState}
       <div className="mb-contextbar-sub">{edgeClass.desc}</div>
     </div>
   </div>
+  {market === 'spx' && (
+    <div className="mb-spx-disclosure">
+      SPX market uses SPY ETF as a 1:1 directional proxy for the S&amp;P 500. Real prediction markets
+      (e.g. IBKR ForecastTrader, Kalshi) may have non-parity contract pricing and slippage that affect
+      realized P&amp;L. This dashboard tests pure market direction; market structure costs are not modeled.
+    </div>
+  )}
 
   <div className="mb-parambar">
     <ParamControl
@@ -3506,6 +3534,75 @@ animation: mb-databanner-pulse 1.1s ease-out 1;
 100% { background-color: inherit; }
 }
 .mb-databanner-age { margin-left: auto; font-size: 10px; opacity: 0.7; }
+
+/* v8.2: Sample-size chip in REAL DATA banner */
+.mb-sample-chip {
+display: inline-block;
+margin-left: 6px;
+padding: 1px 6px;
+border-radius: 2px;
+background: rgba(199, 162, 107, 0.18);
+color: var(--gold-bright, #d4b27a);
+border: 1px solid rgba(199, 162, 107, 0.35);
+font-size: 9.5px;
+letter-spacing: 0.06em;
+cursor: help;
+vertical-align: 1px;
+}
+
+/* v8.2: SPX market-structure disclosure footnote */
+.mb-spx-disclosure {
+margin-top: 6px;
+padding: 6px 10px;
+font-size: 12px;
+font-style: italic;
+color: var(--dim);
+border-left: 2px solid rgba(199, 162, 107, 0.35);
+line-height: 1.5;
+}
+
+/* v8.2: MLB direction explainer banner */
+.mb-mlbdir-banner {
+display: flex;
+align-items: center;
+gap: 10px;
+padding: 8px 12px;
+margin: 0 var(--sp-md) var(--sp-xs);
+background: var(--s2, rgba(199, 162, 107, 0.06));
+border: 1px solid rgba(199, 162, 107, 0.45);
+border-radius: 4px;
+font-size: 13px;
+line-height: 1.45;
+color: var(--text);
+}
+.mb-mlbdir-tag {
+flex: 0 0 auto;
+padding: 2px 8px;
+border-radius: 2px;
+background: rgba(199, 162, 107, 0.18);
+color: var(--gold-bright, #d4b27a);
+font-size: 10px;
+letter-spacing: 0.08em;
+}
+.mb-mlbdir-msg { flex: 1; }
+@media (max-width: 640px) {
+.mb-mlbdir-banner { flex-direction: column; align-items: flex-start; gap: 6px; }
+.mb-mlbdir-msg { font-size: 12px; }
+}
+
+/* v8.2: Disclaimer footer */
+.mb-disclaimer {
+padding: 10px 16px 14px;
+font-size: 10.5px;
+line-height: 1.5;
+color: var(--dim);
+text-align: center;
+opacity: 0.75;
+border-top: 1px solid rgba(255,255,255,0.04);
+}
+@media (max-width: 640px) {
+.mb-disclaimer { font-size: 10px; padding: 8px 12px 12px; text-align: left; }
+}
 .mb-stage-stale .mb-card,
 .mb-stage-stale .mb-kpi,
 .mb-stage-stale .mb-cardgrid,
