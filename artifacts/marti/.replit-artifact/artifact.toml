@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Marti"
+version = "1.0.0"
+id = "artifacts/marti"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 5173
+
+[services.development]
+run = "pnpm --filter @workspace/marti run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/marti", "run", "build" ]
+publicDir = "artifacts/marti/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "5173"
+BASE_PATH = "/"
