@@ -146,17 +146,18 @@ avgExposure: numConcurrent * b0 * 1.5
 // ============================================================
 // DAILY SUMMARY (build from per-sequence profits + period)
 // ============================================================
-function buildDailySummary(profits, statuses, period) {
+function buildDailySummary(profits, statuses, period, seqTimestamps) {
 if (!profits || !period) return [];
 const n = profits.length;
 const startMs = period.startDate.getTime();
 const endMs = period.endDate.getTime();
 const totalMs = endMs - startMs;
-if (totalMs <= 0) return [];
+const useReal = seqTimestamps && seqTimestamps.length === n;
+if (!useReal && totalMs <= 0) return [];
 const dailyMap = new Map();
 
 for (let i = 0; i < n; i++) {
-const closeMs = startMs + ((i + 1) / n) * totalMs;
+const closeMs = useReal ? seqTimestamps[i] : (startMs + ((i + 1) / n) * totalMs);
 const d = new Date(closeMs);
 const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 if (!dailyMap.has(key)) {
@@ -213,6 +214,190 @@ currentStreak = 0;
 return { intervals, sequenceBoundaries, longestLossStreak, totalIntervals: intervals.length };
 }
 
+// ============================================================
+// REAL-DATA OUTCOMES (v8): fetch from /api proxy, cache in localStorage
+// ============================================================
+
+const REAL_CACHE_PREFIX = 'marti_v8_';
+const REAL_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+function realCacheKey(market, startISO, endISO) {
+return `${REAL_CACHE_PREFIX}${market}_${startISO}_${endISO}`;
+}
+
+function readRealCache(key) {
+try {
+const raw = localStorage.getItem(key);
+if (!raw) return null;
+const obj = JSON.parse(raw);
+if (!obj || !obj.savedAt) return null;
+if (Date.now() - obj.savedAt > REAL_CACHE_TTL_MS) return null;
+return obj.payload;
+} catch { return null; }
+}
+
+function writeRealCache(key, payload) {
+try {
+localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), payload }));
+} catch {}
+}
+
+function defaultRealRange() {
+// Bucket "end" to a 6h boundary so consecutive runs within the same bucket share a cache key.
+// Anchored to UTC midnight to keep buckets aligned across sessions.
+const BUCKET_MS = 6 * 60 * 60 * 1000;
+const nowMs = Date.now();
+const endBucketMs = Math.floor(nowMs / BUCKET_MS) * BUCKET_MS;
+const end = new Date(endBucketMs);
+const start = new Date(endBucketMs - 180 * 24 * 3600 * 1000);
+return { startISO: start.toISOString(), endISO: end.toISOString() };
+}
+
+async function fetchRealOutcomes(market, { force = false } = {}) {
+const { startISO, endISO } = defaultRealRange();
+const key = realCacheKey(market, startISO, endISO);
+if (!force) {
+const cached = readRealCache(key);
+if (cached) return { ...cached, cached: true };
+}
+let url;
+if (market === 'btc15') url = `/api/btc/candles?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}&granularity=900`;
+else if (market === 'spx1h') url = `/api/spx/candles?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}&interval=1h`;
+else if (market === 'mlb') url = `/api/mlb/events?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}`;
+else throw new Error(`Real data not available for market: ${market}`);
+
+const r = await fetch(url);
+if (!r.ok) {
+let detail = '';
+try { detail = (await r.json()).message || ''; } catch {}
+throw new Error(`Fetch ${market} failed: ${r.status} ${detail}`);
+}
+const data = await r.json();
+
+let outcomes;
+if (market === 'btc15' || market === 'spx1h') {
+outcomes = (data.candles || [])
+.filter(c => Number.isFinite(c.o) && Number.isFinite(c.c) && c.c !== c.o)
+.map(c => ({ t: c.t * 1000, win: c.c > c.o ? 1 : 0 }));
+} else {
+outcomes = (data.events || []).map(e => ({ t: e.t * 1000, win: e.runs > 0 ? 1 : 0 }));
+}
+
+const payload = {
+market,
+start: data.start,
+end: data.end,
+outcomes,
+fetchedAt: Date.now()
+};
+writeRealCache(key, payload);
+return { ...payload, cached: false };
+}
+
+// Walk real outcomes building martingale sequences. Same shape as simulate() + seqTimestamps.
+function buildSequencesFromOutcomes(outcomes, b0, m, N_max, r) {
+const profitsArr = [];
+const statusesArr = [];
+const lengthsArr = [];
+const maxBetsArr = [];
+const seqTimestamps = [];
+let i = 0;
+const n = outcomes.length;
+while (i < n) {
+let betSize = b0;
+let maxBet = b0;
+let profit = 0;
+let step = 0;
+const seqStart = outcomes[i].t;
+let status = 'cap';
+while (i < n && step < N_max) {
+const o = outcomes[i];
+step++;
+i++;
+if (o.win === 1) {
+profit += betSize * r;
+status = 'win';
+break;
+} else {
+profit -= betSize;
+if (step >= N_max) { status = 'cap'; break; }
+betSize *= m;
+maxBet = betSize;
+}
+}
+if (step === 0) break;
+profitsArr.push(profit);
+statusesArr.push(status === 'win' ? 0 : 1);
+lengthsArr.push(step);
+maxBetsArr.push(maxBet);
+seqTimestamps.push(seqStart);
+}
+const num = profitsArr.length;
+if (num === 0) return null;
+const profits = new Float64Array(profitsArr);
+const statuses = new Uint8Array(statusesArr);
+const lengths = lengthsArr;
+let cum = 0, peak = 0, maxDD = 0, wins = 0, caps = 0;
+const equity = new Array(num);
+const recent = [];
+for (let k = 0; k < num; k++) {
+cum += profits[k];
+if (cum > peak) peak = cum;
+const dd = peak - cum;
+if (dd > maxDD) maxDD = dd;
+equity[k] = cum;
+if (statuses[k] === 0) wins++; else caps++;
+if (k >= num - 30) recent.push({
+id: k + 1, profit: profits[k], length: lengths[k],
+status: statuses[k] === 0 ? 'win' : 'cap',
+maxBet: maxBetsArr[k]
+});
+}
+const sStep = Math.max(1, Math.floor(num / 240));
+const equitySampled = [];
+for (let k = 0; k < num; k += sStep) {
+equitySampled.push({ x: k + 1, y: Math.round(equity[k] * 100) / 100 });
+}
+if (equitySampled.length === 0 || equitySampled[equitySampled.length - 1].x !== num) {
+equitySampled.push({ x: num, y: Math.round(equity[num - 1] * 100) / 100 });
+}
+const lengthDist = [];
+for (let k = 1; k <= N_max; k++) {
+let c = 0;
+for (let q = 0; q < num; q++) if (lengths[q] === k) c++;
+lengthDist.push({ step: `${k}`, count: c, isCap: k === N_max, pct: (c / num) * 100 });
+}
+const betDist = [];
+for (let k = 0; k < N_max; k++) {
+const tier = b0 * Math.pow(m, k);
+let c = 0;
+for (let q = 0; q < num; q++) if (Math.abs(maxBetsArr[q] - tier) < 0.001) c++;
+betDist.push({
+tier: tier >= 1000 ? `$${(tier / 1000).toFixed(1)}k` : `$${tier % 1 === 0 ? tier : tier.toFixed(2)}`,
+count: c,
+isCap: k === N_max - 1
+});
+}
+return {
+equitySampled, lengthDist, betDist, recent: recent.reverse(),
+finalProfit: cum, winRate: wins / num, capCount: caps, capRate: caps / num,
+maxDrawdown: maxDD, peak,
+avgLength: lengths.reduce((a, b) => a + b, 0) / num,
+maxBetEver: maxBetsArr.length ? Math.max(...maxBetsArr) : b0,
+avgPerSeq: cum / num,
+profits, statuses, lengths,
+seqTimestamps,
+realNum: num
+};
+}
+
+function observedWinRate(outcomes) {
+if (!outcomes || outcomes.length === 0) return 0.5;
+let w = 0;
+for (const o of outcomes) if (o.win === 1) w++;
+return w / outcomes.length;
+}
+
 const MARKETS = [
 { id: 'btc15', label: 'BTC 15m', sub: 'Up / Down', icon: Bitcoin, p: 0.52, mpu: 15, unit: 'bar', continuous: true,
 intervalType: '15min bar', intervalsPerDay: 96, intervalShort: 'bar', intervalLong: '15-minute bar',
@@ -228,19 +413,19 @@ intervalType: 'interval', intervalsPerDay: 24, intervalShort: 'interval', interv
 winLabel: 'win', lossLabel: 'loss', stepUnit: 'interval' }
 ];
 
-// Data feeds per market
+// Data feeds per market (v8: real public APIs proxied via /api)
 const DATA_FEEDS = {
-btc15: { feed: 'Coinbase Pro', symbol: 'BTC-USD', latency: '12ms', live: true },
-spx1h: { feed: 'Polygon.io', symbol: 'I:SPX', latency: '48ms', live: true },
-mlb: { feed: 'MLB Stats API', symbol: 'live innings', latency: '~live', live: true },
-custom: { feed: 'Manual', symbol: '—', latency: '—', live: false }
+btc15: { feed: 'Coinbase Exchange', symbol: 'BTC-USD', latency: '~live', live: true },
+spx1h: { feed: 'Twelve Data', symbol: 'SPY (SPX proxy)', latency: '~live', live: true },
+mlb: { feed: 'MLB StatsAPI', symbol: 'live innings', latency: '~live', live: true },
+custom: { feed: 'Monte Carlo', symbol: '—', latency: '—', live: false }
 };
 
-// Operating modes
+// Operating modes (v8: all modes use the same real data; framing only differs)
 const MODES = [
-{ id: 'sim', label: 'SIMULATION', tone: 'gold', desc: 'Synthetic data, no capital at risk' },
-{ id: 'paper', label: 'PAPER', tone: 'teal', desc: 'Live market data, simulated fills' },
-{ id: 'live', label: 'LIVE', tone: 'red', desc: 'Real capital, real fills' }
+{ id: 'sim', label: 'SIMULATION', tone: 'gold', desc: 'Real market data · no capital at risk' },
+{ id: 'paper', label: 'PAPER', tone: 'teal', desc: 'Real market data · simulated fills' },
+{ id: 'live', label: 'LIVE', tone: 'red', desc: 'Real market data · real capital · real fills' }
 ];
 
 // Broker connections
@@ -303,15 +488,21 @@ const [concurrent, setConcurrent] = useState(null);
 const [runCount, setRunCount] = useState(0);
 const [now, setNow] = useState(new Date());
 const [autoSeed, setAutoSeed] = useState(0);
+const [dataError, setDataError] = useState(null);
+const [dataInfo, setDataInfo] = useState(null);
+const [lowVolume, setLowVolume] = useState(false);
 
 useEffect(() => {
 const t = setInterval(() => setNow(new Date()), 1000);
 return () => clearInterval(t);
 }, []);
 
-const handleRun = useCallback(() => {
+const handleRun = useCallback(async (opts = {}) => {
+const force = opts && opts.force === true;
 setRunning(true);
-setTimeout(() => {
+setDataError(null);
+try {
+if (market === 'custom') {
 const main = simulate({ p, b0, m, N_max, r: 1.0, num });
 const scens = SCENARIOS.map(s => ({
 ...s,
@@ -321,18 +512,54 @@ const conc = simulateConcurrent(p, b0, m, N_max, 5, 8000);
 setResults(main);
 setScenarios(scens);
 setConcurrent(conc);
+setDataInfo({ source: 'monte_carlo', market: 'custom' });
+setLowVolume(false);
+} else {
+const payload = await fetchRealOutcomes(market, { force });
+if (!payload.outcomes || payload.outcomes.length === 0) {
+throw new Error(`No outcomes returned for ${market}. Try Refresh data or a different market.`);
+}
+const obsP = observedWinRate(payload.outcomes);
+const main = buildSequencesFromOutcomes(payload.outcomes, b0, m, N_max, 1.0);
+if (!main) throw new Error('Could not build any sequences from real outcomes.');
+setP(obsP);
+const scens = SCENARIOS.map(s => ({
+...s,
+...simulate({ p: s.p, b0, m, N_max, r: 1.0, num: Math.min(num, 5000) })
+}));
+const conc = simulateConcurrent(obsP, b0, m, N_max, 5, 8000);
+setResults(main);
+setScenarios(scens);
+setConcurrent(conc);
+setDataInfo({
+source: 'real',
+market,
+feedStart: payload.start,
+feedEnd: payload.end,
+eventCount: payload.outcomes.length,
+sequenceCount: main.realNum,
+cached: payload.cached,
+fetchedAt: payload.fetchedAt,
+observedWinRate: obsP
+});
+setLowVolume(market === 'mlb' && payload.outcomes.length < 100);
+}
 setRunCount(c => c + 1);
+} catch (err) {
+setDataError(err && err.message ? err.message : String(err));
+} finally {
 setRunning(false);
-}, 280);
-}, [p, b0, m, N_max, num]);
+}
+}, [p, b0, m, N_max, num, market]);
 
 useEffect(() => {
 handleRun();
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, []);
 
+// v8: rebuild from cached data every 60s so equity/timestamps stay fresh; no API hit (cache TTL 6h)
 useEffect(() => {
-const t = setInterval(() => setAutoSeed(s => s + 1), 30000);
+const t = setInterval(() => setAutoSeed(s => s + 1), 60000);
 return () => clearInterval(t);
 }, []);
 useEffect(() => {
@@ -357,10 +584,17 @@ if (e < 0) lo = mid; else hi = mid;
 return (lo + hi) / 2;
 }, [b0, N_max, expectedWorst]);
 
-// Compute simulated time period from market interval × num × avg sequence length
+// Period: from real fetched range when available; falls back to derived window for custom market
 const period = useMemo(() => {
 if (!results) return null;
 const mkt = MARKETS.find(x => x.id === market) || MARKETS[0];
+if (dataInfo?.source === 'real' && dataInfo.feedStart && dataInfo.feedEnd) {
+const startDate = new Date(dataInfo.feedStart);
+const endDate = new Date(dataInfo.feedEnd);
+const totalDays = Math.max(1, (endDate.getTime() - startDate.getTime()) / (24 * 3600 * 1000));
+const totalUnits = (results.realNum || results.profits?.length || 0) * results.avgLength;
+return { totalDays, startDate, endDate, totalUnits, mkt, source: 'real' };
+}
 const totalUnits = num * results.avgLength;
 const totalMinutes = totalUnits * mkt.mpu;
 let totalDays;
@@ -373,8 +607,8 @@ totalDays = weeks * 7;
 }
 const endDate = now;
 const startDate = new Date(endDate.getTime() - totalDays * 24 * 60 * 60 * 1000);
-return { totalDays, startDate, endDate, totalUnits, mkt };
-}, [market, num, results, now]);
+return { totalDays, startDate, endDate, totalUnits, mkt, source: 'monte_carlo' };
+}, [market, num, results, now, dataInfo]);
 
 const edgeClass = useMemo(() => classifyEdge(p), [p]);
 
@@ -384,10 +618,10 @@ if (!results?.lengths || !results?.statuses) return null;
 return synthesizeIntervals(results.lengths, results.statuses, 2000);
 }, [results]);
 
-// Daily aggregation from per-sequence profits + period
+// Daily aggregation from per-sequence profits + period (uses real timestamps when present)
 const dailySummary = useMemo(() => {
 if (!results?.profits || !period) return null;
-return buildDailySummary(results.profits, results.statuses, period);
+return buildDailySummary(results.profits, results.statuses, period, results.seqTimestamps);
 }, [results, period]);
 
 // Money breakdown: today, MTD, lifetime
@@ -426,7 +660,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v7',
+version: 'v8',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -492,6 +726,15 @@ return (
 <div className="mb-tabs-top">
 <TabSwitch view={view} setView={setView} />
 </div>
+
+  <DataBanner
+    dataError={dataError}
+    dataInfo={dataInfo}
+    lowVolume={lowVolume}
+    market={market}
+    onRetry={() => handleRun({ force: true })}
+    running={running}
+  />
 
   <div className="mb-stage">
     {view === 'overview' && (
@@ -576,13 +819,53 @@ return (
 // TOP BAR
 // ============================================================
 
+function DataBanner({ dataError, dataInfo, lowVolume, market, onRetry, running }) {
+if (dataError) {
+return (
+<div className="mb-databanner mb-databanner-err">
+<span className="mb-databanner-tag mono">DATA ERROR</span>
+<span className="mb-databanner-msg">{dataError}</span>
+<button onClick={onRetry} disabled={running} className="mb-databanner-btn mono">Retry</button>
+</div>
+);
+}
+if (lowVolume && market === 'mlb') {
+return (
+<div className="mb-databanner mb-databanner-warn">
+<span className="mb-databanner-tag mono">MLB OFF-SEASON</span>
+<span className="mb-databanner-msg">
+Only {dataInfo?.eventCount ?? 0} half-inning outcomes returned in the last 180 days.
+MLB regular season runs late March through early October — results are thin outside that window. Stats may be noisy.
+</span>
+</div>
+);
+}
+if (dataInfo?.source === 'real') {
+const startStr = dataInfo.feedStart ? new Date(dataInfo.feedStart).toLocaleDateString() : '—';
+const endStr = dataInfo.feedEnd ? new Date(dataInfo.feedEnd).toLocaleDateString() : '—';
+const ageMin = dataInfo.fetchedAt ? Math.round((Date.now() - dataInfo.fetchedAt) / 60000) : 0;
+return (
+<div className="mb-databanner mb-databanner-ok">
+<span className="mb-databanner-tag mono">REAL DATA</span>
+<span className="mb-databanner-msg">
+{dataInfo.eventCount.toLocaleString()} outcomes · {dataInfo.sequenceCount?.toLocaleString() ?? '—'} sequences ·
+{' '}{startStr} → {endStr} ·
+{' '}observed win rate <span className="mono">{(dataInfo.observedWinRate * 100).toFixed(2)}%</span>
+{dataInfo.cached ? ` · cached ${ageMin}m ago` : ' · fresh fetch'}
+</span>
+</div>
+);
+}
+return null;
+}
+
 function TopBar({ now, runCount, running, num, mode, results }) {
 const currentMode = MODES.find(x => x.id === mode);
 return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v7.1</span>
+<span className="mb-brand-ver mono">v8</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -757,19 +1040,21 @@ return (
 
   <div className="mb-msays-body">
     <p className="mb-msays-p">
-      At <strong className="mono pos">{(p * 100).toFixed(0)}%</strong> chance per {mkt?.intervalShort} you're <strong>{casinoCompare}</strong>.
-      Across <strong className="mono">{num.toLocaleString()}</strong> sequences you'd expect roughly{' '}
-      <strong className="mono pos">{winsExpected.toLocaleString()}</strong> wins and{' '}
-      <strong className="mono neg">{lossesExpected.toLocaleString()}</strong> losses on the first {mkt?.intervalShort}.
+      The bot bets <strong>{mkt?.winLabel}</strong> on every {mkt?.intervalShort}. Real data from{' '}
+      <strong>{feed?.feed}</strong> shows it actually went {mkt?.winLabel} on{' '}
+      <strong className="mono pos">{(p * 100).toFixed(2)}%</strong> of {mkt?.intervalShort}s — that's the observed edge.{' '}
+      At this rate you're <strong>{casinoCompare}</strong>.
     </p>
 
     <p className="mb-msays-p">
-      Each martingale step = one <strong>{mkt?.intervalLong}</strong>. With{' '}
-      <strong className="mono">{mkt?.intervalsPerDay}</strong> {mkt?.intervalShort}s per day on{' '}
-      <strong>{mkt?.label}</strong>, this {mode === 'paper' ? 'paper trading run' : mode === 'live' ? 'live trading run' : 'simulation'} covers{' '}
-      <strong className="mono">{fmtDateShort(period.startDate)}</strong> to{' '}
+      Each martingale step = one <strong>{mkt?.intervalLong}</strong>. This run replays{' '}
+      <strong className="mono">{(results.realNum || num).toLocaleString()}</strong> sequences built from real outcomes between{' '}
+      <strong className="mono">{fmtDateShort(period.startDate)}</strong> and{' '}
       <strong className="mono">{fmtDateShort(period.endDate)}</strong>{' '}
-      (<strong>{fmtDurationShort(period.totalDays)}</strong>) via <strong>{feed?.feed}</strong>.
+      (<strong>{fmtDurationShort(period.totalDays)}</strong>).
+      {mode === 'live' ? ' In LIVE mode, the same trades would have moved real capital.' :
+       mode === 'paper' ? ' In PAPER mode, fills are simulated against the same real prices.' :
+       ' In SIM mode, no fills hit any broker.'}{' '}
       Net P&L: <strong className={`mono ${results.finalProfit >= 0 ? 'pos' : 'neg'}`}>
         {fmtMoney(results.finalProfit, 0)}
       </strong>.
@@ -1227,22 +1512,27 @@ try {
 
   const fullPrompt = `${systemPrompt}\n\nConversation so far:\n${historyText}\n\nMarti's next response (concise, plain English, cite specific numbers):`;
 
-  // Demo stub — replaces window.claude.complete for standalone deployment
-  const demoAnswers = [
-    "Based on your current parameters, the martingale system carries substantial ruin risk. Consecutive losing streaks — which are statistically guaranteed over long sessions — will exhaust your bankroll faster than a single lucky win can recover it.",
-    "Your win probability is the single most important variable. Even a tiny edge under 50% compounds into near-certain ruin. The simulations show this clearly: skewness and peak drawdown are your real enemies, not variance.",
-    "The multiplier you've chosen determines how quickly your bet size escalates. At 2×, you need a bankroll of 2^N times your base bet to survive N consecutive losses. With a 1,000-unit bankroll and 1-unit base bet, you survive at most 9 straight losses.",
-    "No betting system can overcome a negative expected value. The martingale delays losses but doesn't prevent them. Over infinite trials, the house always collects its edge regardless of sequence.",
-    "Your Insights panel is the best tool here — watch the ruin rate and median survival length as you adjust parameters. A ruin rate above 20% is a red flag for any real-money use of this strategy.",
-  ];
-  await new Promise(r => setTimeout(r, 700 + Math.random() * 900));
-  const response = demoAnswers[Math.floor(Math.random() * demoAnswers.length)];
-
-  setMessages(m => [...m, { role: 'marty', text: response.trim(), time: new Date() }]);
+  const history = newMessages.map(mm => ({
+    role: mm.role === 'user' ? 'user' : 'assistant',
+    content: mm.text
+  }));
+  const r = await fetch('/api/ask-marti', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ system: systemPrompt, messages: history })
+  });
+  if (!r.ok) {
+    let detail = '';
+    try { detail = (await r.json()).message || ''; } catch {}
+    throw new Error(`Server ${r.status} ${detail}`);
+  }
+  const data = await r.json();
+  const responseText = (data.content || '').trim() || 'No response from Anthropic.';
+  setMessages(m => [...m, { role: 'marty', text: responseText, time: new Date() }]);
 } catch (err) {
   setMessages(m => [...m, {
     role: 'marty',
-    text: 'Connection error. Please try again.',
+    text: `Connection error: ${err && err.message ? err.message : 'unknown'}`,
     time: new Date(),
     error: true
   }]);
@@ -1414,7 +1704,7 @@ return `You are Marti, an AI co-pilot embedded inside the Marti dashboard - a ma
 CURRENT STATE SNAPSHOT - use these exact numbers in every response:
 
 MODE: ${ctx.mode}
-${ctx.mode === 'SIM' ? '(Synthetic data, no real capital at risk)' : ctx.mode === 'PAPER' ? '(Live market data, simulated fills)' : '(Real capital, real fills - LIVE MONEY)'}
+${ctx.mode === 'SIM' ? '(Real market data, no capital at risk — outcomes are replayed, not synthetic)' : ctx.mode === 'PAPER' ? '(Real market data, simulated fills against real prices)' : '(Real market data, real capital, real fills — LIVE MONEY)'}
 
 MARKET: ${ctx.market.label}
 
@@ -1948,15 +2238,22 @@ exportState={exportState}
   </div>
 
   <div className="mb-parambar">
-    <ParamControl label="p" hint="Win prob" value={`${(p * 100).toFixed(0)}%`}>
+    <ParamControl
+      label={market === 'custom' ? 'p' : 'p̂'}
+      hint={market === 'custom' ? 'Win prob' : 'Observed win rate'}
+      value={`${(p * 100).toFixed(1)}%`}
+    >
       <input
         type="range"
         min={0.40}
         max={0.65}
         step={0.01}
         value={p}
-        onChange={e => setP(parseFloat(e.target.value))}
+        onChange={e => { if (market === 'custom') setP(parseFloat(e.target.value)); }}
         className="mb-slider"
+        disabled={market !== 'custom'}
+        readOnly={market !== 'custom'}
+        title={market !== 'custom' ? 'Read-only — derived from real outcomes' : 'Drag to set win probability'}
       />
       <EdgeMeter p={p} />
     </ParamControl>
@@ -2004,7 +2301,7 @@ exportState={exportState}
       />
     </ParamControl>
     <div className="mb-param-actions">
-      <button onClick={onRun} disabled={running} className="mb-runbtn">
+      <button onClick={() => onRun()} disabled={running} className="mb-runbtn">
         {running ? (
           <>
             <span className="mb-spinner"></span>
@@ -2017,6 +2314,16 @@ exportState={exportState}
           </>
         )}
       </button>
+      {market !== 'custom' && (
+        <button
+          onClick={() => onRun({ force: true })}
+          disabled={running}
+          className="mb-runbtn mb-runbtn-ghost"
+          title="Re-fetch real market data (bypass 6h cache)"
+        >
+          <span>↻ Refresh data</span>
+        </button>
+      )}
     </div>
   </div>
 
@@ -3433,6 +3740,60 @@ border: 1px solid var(--border);
 }
 
 /* ============================================
+DATA BANNER (v8 real-data status / errors)
+============================================ */
+.mb-databanner {
+display: flex;
+align-items: center;
+gap: 12px;
+padding: 8px 16px;
+border-bottom: 1px solid var(--border);
+font-size: 12px;
+flex-wrap: wrap;
+}
+.mb-databanner-ok { background: rgba(61, 110, 82, 0.06); color: var(--muted); }
+.mb-databanner-warn { background: rgba(199, 162, 107, 0.08); color: var(--gold); }
+.mb-databanner-err { background: rgba(196, 69, 69, 0.10); color: var(--red); }
+.mb-databanner-tag {
+font-size: 10px;
+font-weight: 700;
+letter-spacing: 0.08em;
+padding: 2px 6px;
+border: 1px solid currentColor;
+border-radius: 2px;
+opacity: 0.85;
+}
+.mb-databanner-msg { flex: 1; min-width: 200px; }
+.mb-databanner-btn {
+background: transparent;
+border: 1px solid currentColor;
+color: inherit;
+padding: 3px 10px;
+font-size: 11px;
+cursor: pointer;
+border-radius: 2px;
+}
+.mb-databanner-btn:hover:not(:disabled) { background: rgba(255,255,255,0.04); }
+.mb-databanner-btn:disabled { opacity: 0.4; cursor: wait; }
+
+.mb-runbtn-ghost {
+background: transparent !important;
+border: 1px solid var(--border) !important;
+color: var(--muted) !important;
+margin-left: 6px;
+}
+.mb-runbtn-ghost:hover:not(:disabled) {
+border-color: var(--gold) !important;
+color: var(--gold) !important;
+}
+
+.mb-slider[disabled],
+.mb-slider[readonly] {
+opacity: 0.7;
+cursor: not-allowed;
+}
+
+/* ============================================
 EDGE METER (under p slider)
 ============================================ */
 .mb-edgemeter {
@@ -3443,8 +3804,8 @@ margin-top: 6px;
 padding-bottom: 16px;
 }
 @media (max-width: 480px) {
-.mb-edgemeter { padding-bottom: 18px; }
-.mb-edgemeter-ticklabel { font-size: 8px; }
+.mb-edgemeter { padding-bottom: 6px; }
+.mb-edgemeter-ticklabel { display: none; }
 }
 .mb-edgemeter-track {
 position: relative;
