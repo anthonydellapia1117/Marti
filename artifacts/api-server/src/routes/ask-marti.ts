@@ -3,10 +3,9 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const router: IRouter = Router();
 
-const baseURL = process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
-const apiKey = process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY;
+const apiKey = process.env.ANTHROPIC_API_KEY;
 
-const client: Anthropic | null = baseURL && apiKey ? new Anthropic({ baseURL, apiKey }) : null;
+const client: Anthropic | null = apiKey ? new Anthropic({ apiKey }) : null;
 
 interface ChatBody {
   system?: string;
