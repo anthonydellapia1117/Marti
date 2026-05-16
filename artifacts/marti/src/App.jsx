@@ -571,7 +571,11 @@ const [rawOutcomes, setRawOutcomes] = useState(null);
 const [simpleMode, setSimpleMode] = useState(false);
 // v9.1: Guided Mode — new default UX (guided 4-step flow); 'expert' shows the old tab interface
 const [viewMode, setViewMode] = useState('guided');
-const [guidedStep, setGuidedStep] = useState(1);
+// v9.1.3: returning users who opted in skip the welcome and land on Step 2
+const [guidedStep, setGuidedStep] = useState(() => {
+  try { return localStorage.getItem('marti_skip_welcome') === 'true' ? 2 : 1; }
+  catch { return 1; }
+});
 const [guidedInputs, setGuidedInputs] = useState({ bankroll: 50000, dailyBudget: 1500, comfort: 'balanced' });
 const [pendingRun, setPendingRun] = useState(false);
 const [runCount, setRunCount] = useState(0);
@@ -766,7 +770,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.1.2-result',
+version: 'v9.1.3-skip-intro',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1087,7 +1091,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.1.2-result</span>
+<span className="mb-brand-ver mono">v9.1.3-skip-intro</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -1104,7 +1108,11 @@ return (
   onClick={() => {
     setViewMode(v => {
       const next = v === 'guided' ? 'expert' : 'guided';
-      if (next === 'guided') setGuidedStep(1);
+      if (next === 'guided') {
+        // v9.1.3: respect the skip-welcome flag when re-entering Guided
+        try { setGuidedStep(localStorage.getItem('marti_skip_welcome') === 'true' ? 2 : 1); }
+        catch { setGuidedStep(1); }
+      }
       return next;
     });
   }}
@@ -3457,6 +3465,7 @@ function GuidedView({ guidedStep, setGuidedStep, guidedInputs, setGuidedInputs, 
           setInputs={setGuidedInputs}
           onBack={() => setGuidedStep(1)}
           onNext={() => setGuidedStep(3)}
+          onShowWelcome={() => setGuidedStep(1)}
         />
       )}
       {guidedStep === 3 && (
@@ -3487,6 +3496,18 @@ function GuidedView({ guidedStep, setGuidedStep, guidedInputs, setGuidedInputs, 
 
 function GuidedScreen1({ onNext }) {
   const [open, setOpen] = useState(false);
+  // v9.1.3: initialize checkbox from existing localStorage flag so returning users see their saved preference
+  const [skipNext, setSkipNext] = useState(() => {
+    try { return localStorage.getItem('marti_skip_welcome') === 'true'; }
+    catch { return false; }
+  });
+  const handleNext = () => {
+    try {
+      if (skipNext) localStorage.setItem('marti_skip_welcome', 'true');
+      else localStorage.removeItem('marti_skip_welcome');
+    } catch {}
+    onNext();
+  };
   return (
     <div className="mb-guided-card mb-guided-anim">
       <h2 className="mb-guided-title">Welcome to Marti</h2>
@@ -3520,15 +3541,23 @@ function GuidedScreen1({ onNext }) {
           <p className="mb-guided-ladder-cap mono dim">starts at $5 · caps at $160 after 6 losses</p>
         </div>
       )}
+      <label className="mb-guided-skip">
+        <input
+          type="checkbox"
+          checked={skipNext}
+          onChange={e => setSkipNext(e.target.checked)}
+        />
+        <span>Don't show this intro again</span>
+      </label>
       <div className="mb-guided-actions">
         <span />
-        <button type="button" className="mb-guided-btn-primary" onClick={onNext}>Let's go →</button>
+        <button type="button" className="mb-guided-btn-primary" onClick={handleNext}>Let's go →</button>
       </div>
     </div>
   );
 }
 
-function GuidedScreen2({ inputs, setInputs, onBack, onNext }) {
+function GuidedScreen2({ inputs, setInputs, onBack, onNext, onShowWelcome }) {
   const { bankroll, dailyBudget, comfort } = inputs;
   let error = null;
   if (bankroll < 100) error = 'Bankroll too small to be meaningful.';
@@ -3537,7 +3566,12 @@ function GuidedScreen2({ inputs, setInputs, onBack, onNext }) {
 
   return (
     <div className="mb-guided-card mb-guided-anim">
-      <h2 className="mb-guided-title">Your situation</h2>
+      <div className="mb-guided-title-row">
+        <h2 className="mb-guided-title">Your situation</h2>
+        {onShowWelcome && (
+          <button type="button" className="mb-guided-welcome-link" onClick={onShowWelcome}>What is Marti?</button>
+        )}
+      </div>
       <p className="mb-guided-sub">We need three pieces of information from you.</p>
 
       <div className="mb-guided-field">
@@ -6550,6 +6584,48 @@ letter-spacing: 0.08em;
 .mb-guided-ladder-red { color: var(--red-bright); border-color: var(--red); }
 .mb-guided-ladder-arrow { color: var(--dim); font-size: var(--fs-sm); }
 .mb-guided-ladder-cap { margin: 6px 0 0; font-size: var(--fs-xs); }
+
+/* v9.1.3: skip-welcome checkbox + manual override link */
+.mb-guided-skip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.mb-guided-skip input {
+  accent-color: var(--teal);
+  cursor: pointer;
+}
+.mb-guided-skip:hover { color: var(--text); }
+.mb-guided-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-md);
+  flex-wrap: wrap;
+}
+.mb-guided-welcome-link {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  cursor: pointer;
+  text-decoration: none;
+}
+.mb-guided-welcome-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.mb-guided-welcome-link:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
 
 .mb-guided-field {
   display: flex; flex-direction: column; gap: 6px;
