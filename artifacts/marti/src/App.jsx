@@ -2995,17 +2995,24 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
   const showSpxDisclosure = market === 'spx1h';
   const showMlbBanner = market === 'mlb' && winRate < 0.40 && !isStale;
 
-  const theoreticalMax = Math.max(...distribution.map(d => d.theoretical), 0);
+  const q = Math.max(winRate, 1 - winRate);
+  const theoreticalMax = q === 0.5
+    ? Math.log2(n)
+    : Math.log(n) / Math.log(1 / q);
   const divergencePct = theoreticalMax > 0 ? ((max - theoreticalMax) / theoreticalMax) * 100 : 0;
   const divergenceAbove = divergencePct > 0;
 
   let insight;
-  if (Math.abs(divergencePct) < 25) {
-    insight = `${mktLabel} max streak of ${max} aligns closely with random-walk theoretical max of ${theoreticalMax.toFixed(1)}, consistent with a near-coin-flip market.`;
-  } else if (divergenceAbove) {
-    insight = `${mktLabel} max streak of ${max} exceeds theoretical ${theoreticalMax.toFixed(1)} by ${divergencePct.toFixed(0)}%, suggesting non-random clustering — fund the bot to survive at least ${max} + safety margin.`;
+  if (Math.abs(divergencePct) > 30) {
+    insight = `Max streak of ${max} significantly ${divergenceAbove ? 'exceeds' : 'falls short of'} directional theoretical max of ${theoreticalMax.toFixed(1)}. Possible non-random clustering — investigate before deploying capital.`;
+  } else if (market === 'mlb' && Math.abs(divergencePct) < 30) {
+    insight = `Max streak of ${max} is consistent with random clustering at the observed ${(winRate * 100).toFixed(0)}% scoring rate. The dominant direction (NO-score, ~${(q * 100).toFixed(0)}%) drives streaks up to a directional theoretical max of ${theoreticalMax.toFixed(1)}. Fund the bot to survive max + safety margin regardless of randomness.`;
+  } else if (market === 'spx1h' && Math.abs(divergencePct) < 20) {
+    insight = `Max streak of ${max} aligns closely with random walk theoretical max of ${theoreticalMax.toFixed(1)}. SPX 1H is essentially symmetric — fund the bot to survive max + safety margin.`;
+  } else if (market === 'btc15' && Math.abs(divergencePct) < 20) {
+    insight = `Max streak of ${max} aligns closely with random walk theoretical max of ${theoreticalMax.toFixed(1)}. BTC 15m behaves like a coin flip — fund the bot to survive max + safety margin and the strategy is mathematically robust.`;
   } else {
-    insight = `${mktLabel} max streak of ${max} is ${Math.abs(divergencePct).toFixed(0)}% below theoretical ${theoreticalMax.toFixed(1)}; observed streaks are tamer than random-walk would predict.`;
+    insight = `Max streak of ${max} sits ${Math.abs(divergencePct).toFixed(0)}% ${divergenceAbove ? 'above' : 'below'} directional theoretical max of ${theoreticalMax.toFixed(1)} (observed win rate ${(winRate * 100).toFixed(0)}%).`;
   }
 
   return (
