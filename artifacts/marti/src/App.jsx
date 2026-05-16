@@ -759,7 +759,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.0-scoring-v2',
+version: 'v9.0-final',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1046,7 +1046,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.0-scoring-v2</span>
+<span className="mb-brand-ver mono">v9.0-final</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -3208,6 +3208,9 @@ function PlainEnglishCard({ results, outcomes, market, dataInfo, period, isStale
             {capsPerDay !== null && (
               <> On a typical day, you might hit about <span className="mono">{fmtCaps(capsPerDay)}</span> cap events.</>
             )}
+            {capsPerDay !== null && (
+              <> Over 30 days, expect about <span className="mono">{(capsPerDay * 30).toFixed(capsPerDay * 30 >= 1 ? 0 : 1)}</span> cap events costing roughly <span className="mono">{fmtBankroll(capsPerDay * 30 * perSeqMaxLoss)}</span> total.</>
+            )}
           </div>
         </div>
 
@@ -3479,6 +3482,12 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
                   </div>
                   <div className="mb-rec-primary-sub">
                     Bot bets the <span className="mono">{mkt?.directionLabel || '—'}</span> direction. Expected: <span className="mono">{fmtCapRate(r.capRate)}</span> cap rate, <span className="mono">{fmtBankroll(r.perSeqMaxLoss)}</span> max single-sequence loss.
+                    {(() => {
+                      const rm = computeRiskMetrics(bankroll, r.perSeqMaxLoss, r.capRate, r.seqsPerDay, 30);
+                      return (
+                        <> · 30-day P(ruin): <span className={`mono ${riskTone(rm.pRuin) === 'teal' ? 'pos' : riskTone(rm.pRuin) === 'red' ? 'neg' : 'gold'}`}>{rm.pRuin < 0.0001 ? '<0.01%' : `${(rm.pRuin * 100).toFixed(2)}%`}</span>, ~<span className="mono">{rm.expectedCaps30 >= 1 ? rm.expectedCaps30.toFixed(0) : rm.expectedCaps30.toFixed(2)}</span> cap events expected.</>
+                      );
+                    })()}
                   </div>
                   <div className="mb-kpistrip mb-rec-kpis">
                     <div className="mb-kpi mb-kpi-primary">
@@ -3576,6 +3585,8 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
   const [safetyMarginPct, setSafetyMarginPct] = useState(50);
   // v9 Phase 2 pivot: N_max slider for cap-aware analysis
   const [bankrollNMax, setBankrollNMax] = useState(6);
+  // v9 Phase 4 Lite: bankroll input for Risk Engine (P(ruin) calc)
+  const [riskBankroll, setRiskBankroll] = useState(10000);
 
   if (!outcomes || outcomes.length === 0) {
     return (
@@ -3695,6 +3706,18 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
     label: 'UNCAPPED REFERENCE',
     msg: `To eliminate cap events entirely, you would need ${fmtBankroll(funding.uncappedBankroll)} — this is the ${tierName}-tier requirement and is shown only as reference.`,
   };
+
+  // v9 Phase 4 Lite: seqsPerDay needed for both trade-off chart and risk engine
+  const totalDays = dataInfo && dataInfo.feedStart && dataInfo.feedEnd
+    ? Math.max(1, (new Date(dataInfo.feedEnd) - new Date(dataInfo.feedStart)) / 86400000)
+    : 1;
+  const outcomesPerDay = n / totalDays;
+  const avgSeqLen = winRate > 0 ? Math.min(1 / winRate, bankrollNMax) : bankrollNMax;
+  const seqsPerDay = outcomesPerDay / avgSeqLen;
+  const riskMetrics = useMemo(
+    () => computeRiskMetrics(riskBankroll, funding.perSeqMaxLoss, funding.capRate, seqsPerDay, 30),
+    [riskBankroll, funding.perSeqMaxLoss, funding.capRate, seqsPerDay]
+  );
 
   // Trade-off curve: how per-seq loss and cap rate move as N_max ranges from 2 to (max + 5)
   const tradeoffData = useMemo(() => {
@@ -3985,9 +4008,132 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
           <span className="mb-streak-legend-item"><span className="mb-streak-swatch" style={{ background: '#5a9978' }}></span>Cap rate % (right)</span>
           <span className="mb-streak-legend-item"><span className="mb-streak-swatch" style={{ background: '#d4b787' }}></span>Current N_max</span>
         </div>
+
+        <div className="mb-section-head mb-section-head-tight mb-risk-head">
+          <h3 className="mb-section-title-sm">Risk Engine: How likely is bankruptcy?</h3>
+          <span className="mb-section-meta mono">Poisson cap arrivals</span>
+        </div>
+        <div className="mb-risk-controls">
+          <label className="mb-risk-bankroll-label">
+            <span>Assumed total bankroll <Hint term="Bankroll for risk calc">P(ruin) compares expected cap losses over 30 days against this bankroll. Increase to see how survival improves with more capital.</Hint></span>
+            <input
+              type="range" min={1000} max={500000} step={1000}
+              value={riskBankroll}
+              onChange={e => setRiskBankroll(parseInt(e.target.value, 10))}
+              className="mb-slider"
+              aria-label="Risk engine assumed bankroll"
+            />
+            <span className="mono mb-risk-bankroll-val">{fmtBankroll(riskBankroll)}</span>
+          </label>
+        </div>
+        <div className="mb-kpistrip mb-risk-kpis">
+          <div className="mb-kpi mb-kpi-primary">
+            <div className="mb-kpi-label">P(ruin) over 30 days <Hint term="P(ruin)">Probability that cap-event losses exceed your bankroll within 30 days, using Poisson(λ = seqsPerDay·days·capRate). Lower is safer.</Hint></div>
+            <div className={`mb-kpi-value mono ${riskTone(riskMetrics.pRuin) === 'teal' ? 'pos' : riskTone(riskMetrics.pRuin) === 'red' ? 'neg' : 'gold'}`}>
+              {riskMetrics.pRuin < 0.0001 ? '<0.01%' : `${(riskMetrics.pRuin * 100).toFixed(2)}%`}
+            </div>
+          </div>
+          <div className="mb-kpi">
+            <div className="mb-kpi-label">Drawdown survival <Hint term="Drawdown survival">Probability you do NOT see 5 consecutive cap events: 1 − capRate^5. A tail-risk health check.</Hint></div>
+            <div className="mb-kpi-value mono pos">
+              {(riskMetrics.drawdownSurvival * 100 >= 99.99 ? '>99.99' : (riskMetrics.drawdownSurvival * 100).toFixed(2))}%
+            </div>
+          </div>
+          <div className="mb-kpi">
+            <div className="mb-kpi-label">Expected caps / day</div>
+            <div className="mb-kpi-value mono">
+              {riskMetrics.expectedCapsPerDay >= 1 ? riskMetrics.expectedCapsPerDay.toFixed(2) : riskMetrics.expectedCapsPerDay.toFixed(3)}
+            </div>
+          </div>
+          <div className="mb-kpi">
+            <div className="mb-kpi-label">Bankroll covers (cap events)</div>
+            <div className="mb-kpi-value mono gold">
+              ~{riskMetrics.bankrollInCaps.toLocaleString()}
+            </div>
+          </div>
+        </div>
+        <div className="mb-risk-gauge">
+          <div className="mb-risk-gauge-bar">
+            <div className="mb-risk-gauge-marker" style={{ left: `${riskMarkerPct(riskMetrics.pRuin)}%` }} />
+          </div>
+          <div className="mb-risk-gauge-labels mono">
+            <span>Safe</span><span>Borderline</span><span>Concerning</span>
+          </div>
+        </div>
+        <div className="mb-risk-horizon">
+          <div className="mb-risk-horizon-head">Expected cap events over time</div>
+          <div className="mb-risk-horizon-grid">
+            <div className="mb-risk-horizon-cell">
+              <div className="mb-risk-horizon-label">30 days</div>
+              <div className="mono mb-risk-horizon-val">~{riskMetrics.expectedCaps30 >= 1 ? riskMetrics.expectedCaps30.toFixed(0) : riskMetrics.expectedCaps30.toFixed(2)}</div>
+            </div>
+            <div className="mb-risk-horizon-cell">
+              <div className="mb-risk-horizon-label">60 days</div>
+              <div className="mono mb-risk-horizon-val">~{riskMetrics.expectedCaps60 >= 1 ? riskMetrics.expectedCaps60.toFixed(0) : riskMetrics.expectedCaps60.toFixed(2)}</div>
+            </div>
+            <div className="mb-risk-horizon-cell">
+              <div className="mb-risk-horizon-label">90 days</div>
+              <div className="mono mb-risk-horizon-val">~{riskMetrics.expectedCaps90 >= 1 ? riskMetrics.expectedCaps90.toFixed(0) : riskMetrics.expectedCaps90.toFixed(2)}</div>
+            </div>
+          </div>
+        </div>
       </section>
     </div>
   );
+}
+
+// v9 Phase 4 Lite: Poisson CDF for P(ruin) estimation. Recurrence avoids factorial overflow.
+function poissonCDF(k, lambda) {
+  if (lambda <= 0) return 1;
+  if (k < 0) return 0;
+  let term = Math.exp(-lambda);
+  if (!Number.isFinite(term) || term === 0) return k >= lambda ? 1 : 0;
+  let sum = term;
+  const cap = Math.min(Math.floor(k), 10000);
+  for (let i = 1; i <= cap; i++) {
+    term = term * lambda / i;
+    sum += term;
+    if (term < 1e-15 && i > lambda) break;
+  }
+  return Math.min(1, sum);
+}
+
+// v9 Phase 4 Lite: three risk metrics for a given (bankroll, perSeqMaxLoss, capRate, seqsPerDay).
+// pRuin: prob cap-loss events exceed bankroll capacity over `days`, assuming Poisson cap arrivals.
+// drawdownSurvival: prob you DON'T see 5 consecutive caps (rare-tail health check).
+// expectedCaps: linear in days (Poisson mean = seqsPerDay * days * capRate).
+function computeRiskMetrics(bankroll, perSeqMaxLoss, capRate, seqsPerDay, days = 30) {
+  const bankrollInCaps = perSeqMaxLoss > 0 ? Math.floor(bankroll / perSeqMaxLoss) : 0;
+  const lambda = seqsPerDay * days * capRate;
+  const pRuin = bankrollInCaps > 0 ? Math.max(0, 1 - poissonCDF(bankrollInCaps, lambda)) : 1;
+  const drawdownSurvival = 1 - Math.pow(capRate, 5);
+  const expectedCaps = seqsPerDay * capRate;
+  return {
+    pRuin,
+    drawdownSurvival,
+    expectedCapsPerDay: expectedCaps,
+    expectedCaps30: expectedCaps * 30,
+    expectedCaps60: expectedCaps * 60,
+    expectedCaps90: expectedCaps * 90,
+    bankrollInCaps,
+    lambda30: lambda,
+  };
+}
+
+// v9 Phase 4 Lite: traffic-light tone for P(ruin)
+function riskTone(pRuin) {
+  if (pRuin < 0.001) return 'teal';
+  if (pRuin < 0.01) return 'gold';
+  return 'red';
+}
+
+// v9 Phase 4 Lite: marker position on the safety gauge (0..100)
+function riskMarkerPct(pRuin) {
+  if (pRuin < 0.0001) return 6;
+  if (pRuin < 0.001) return 22;
+  if (pRuin < 0.01) return 50;
+  if (pRuin < 0.1) return 78;
+  return 94;
 }
 
 // v9 Phase 2: format big bankroll values; flips to ∞ when not finite or beyond MAX_SAFE_INTEGER
@@ -4912,6 +5058,99 @@ letter-spacing: 0.08em;
   opacity: 0.85;
 }
 .mb-streak-verdict-sm .mb-streak-verdict-tag { font-size: 9px; padding: 1px 6px; }
+
+/* v9 Phase 4 Lite: Risk Engine block */
+.mb-risk-head { border-top: 1px solid var(--border); }
+.mb-risk-controls { padding: var(--sp-sm) var(--sp-md); border-bottom: 1px solid var(--border); }
+.mb-risk-bankroll-label {
+  display: grid;
+  grid-template-columns: 1fr 2fr auto;
+  gap: var(--sp-md);
+  align-items: center;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.mb-risk-bankroll-val { color: var(--text); text-transform: none; font-size: var(--fs-sm); }
+@media (max-width: 720px) {
+  .mb-risk-bankroll-label { grid-template-columns: 1fr; gap: 6px; }
+}
+.mb-risk-kpis {
+  margin: var(--sp-md);
+  grid-template-columns: repeat(4, 1fr);
+}
+@media (max-width: 720px) {
+  .mb-risk-kpis { grid-template-columns: repeat(2, 1fr); }
+}
+.mb-risk-gauge {
+  padding: var(--sp-sm) var(--sp-md);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--s2);
+}
+.mb-risk-gauge-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(to right,
+    var(--teal-bright) 0%,
+    var(--teal-bright) 25%,
+    var(--gold-bright) 50%,
+    var(--red-bright) 75%,
+    var(--red-bright) 100%);
+  position: relative;
+  margin-bottom: 6px;
+}
+.mb-risk-gauge-marker {
+  position: absolute;
+  top: -3px;
+  width: 4px;
+  height: 14px;
+  background: var(--text);
+  transform: translateX(-50%);
+  border-radius: 1px;
+  box-shadow: 0 0 4px rgba(0,0,0,0.6);
+  transition: left 0.25s ease-out;
+}
+.mb-risk-gauge-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.mb-risk-horizon { padding: var(--sp-sm) var(--sp-md) var(--sp-md); }
+.mb-risk-horizon-head {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.mb-risk-horizon-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.mb-risk-horizon-cell {
+  background: var(--s1);
+  padding: var(--sp-sm);
+  text-align: center;
+}
+.mb-risk-horizon-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.mb-risk-horizon-val {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--gold-bright);
+}
 
 /* v9 Phase 3a: Plain English toggle pill in TopBar */
 .mb-plain-toggle {
