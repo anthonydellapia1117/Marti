@@ -6,7 +6,8 @@ ResponsiveContainer, ReferenceLine, Cell, Area, AreaChart, CartesianGrid
 import {
 Activity, Layers, BarChart3, Bitcoin, Target, Settings2,
 ChevronRight, Play, Circle, AlertCircle, Hexagon, ArrowUp, ArrowDown,
-MessageSquare, Send, Sparkles, Download, Keyboard, Zap, Flame
+MessageSquare, Send, Sparkles, Download, Keyboard, Zap, Flame,
+HelpCircle, DollarSign, TrendingUp, Percent
 } from 'lucide-react';
 
 // ============================================================
@@ -531,6 +532,8 @@ const [results, setResults] = useState(null);
 const [scenarios, setScenarios] = useState(null);
 const [concurrent, setConcurrent] = useState(null);
 const [rawOutcomes, setRawOutcomes] = useState(null);
+// v9 Phase 3a: global toggle for the Plain English translation layer
+const [simpleMode, setSimpleMode] = useState(false);
 const [runCount, setRunCount] = useState(0);
 const [now, setNow] = useState(new Date());
 const [autoSeed, setAutoSeed] = useState(0);
@@ -723,7 +726,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.0-bankroll-aware',
+version: 'v9.0-plain-english',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -773,6 +776,7 @@ case '2': setView('workspace'); break;
 case '3': setView('insights'); break;
 case '4': setView('askmarty'); break;
 case 'r': case 'R': handleRun(); break;
+case 'p': case 'P': setSimpleMode(s => !s); break;
 case '/': e.preventDefault(); setView('askmarty'); break;
 default: break;
 }
@@ -784,7 +788,7 @@ return () => window.removeEventListener('keydown', handler);
 return (
 <div className="mb-root">
 <style>{styles}</style>
-<TopBar now={now} runCount={runCount} running={running} num={num} mode={mode} results={results} />
+<TopBar now={now} runCount={runCount} running={running} num={num} mode={mode} results={results} simpleMode={simpleMode} setSimpleMode={setSimpleMode} />
 <OperatingStatusBar mode={mode} setMode={setMode} market={market} />
 <div className="mb-tabs-top">
 <TabSwitch view={view} setView={setView} />
@@ -813,6 +817,19 @@ return (
   />
 
   <div className={`mb-stage ${isStale ? 'mb-stage-stale' : ''}`}>
+    {simpleMode && (
+      <PlainEnglishCard
+        results={results}
+        outcomes={rawOutcomes}
+        market={market}
+        dataInfo={dataInfo}
+        period={period}
+        isStale={isStale}
+        p={p} b0={b0} m={m} N_max={N_max}
+        expectedWorst={expectedWorst}
+        breakevenP={breakevenP}
+      />
+    )}
     {view === 'overview' && (
       <OverviewView
         results={results}
@@ -983,13 +1000,13 @@ title="Sample size below 1,000 outcomes. Observed win rate may regress toward 50
 return null;
 }
 
-function TopBar({ now, runCount, running, num, mode, results }) {
+function TopBar({ now, runCount, running, num, mode, results, simpleMode, setSimpleMode }) {
 const currentMode = MODES.find(x => x.id === mode);
 return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.0-bankroll-aware</span>
+<span className="mb-brand-ver mono">v9.0-plain-english</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -1001,6 +1018,15 @@ return (
 <span className="mb-meta-sep">·</span>
 <span>{(num / 1000).toFixed(0)}k seq</span>
 </div>
+<button
+  type="button"
+  onClick={() => setSimpleMode(s => !s)}
+  className={`mb-plain-toggle ${simpleMode ? 'mb-plain-toggle-on' : 'mb-plain-toggle-off'}`}
+  aria-pressed={simpleMode}
+  title="Toggle Plain English mode (shortcut: P)"
+>
+  {simpleMode ? 'Plain English: ON' : 'Plain English'}
+</button>
 <div className="mb-clock mono">
 {now.toLocaleTimeString('en-US', { hour12: false })}
 </div>
@@ -2963,6 +2989,148 @@ return (
 }
 
 // ============================================================
+// PLAIN ENGLISH CARD (v9 Phase 3a)
+// Translation overlay — appears at top of mb-stage when simpleMode is on.
+// Five questions + traffic-light verdict. Purely additive; existing views unchanged.
+// ============================================================
+
+const PLAIN_WHAT_IM_DOING = {
+  btc15: "You're using a Martingale strategy on Bitcoin 15-minute price changes. You bet on whether Bitcoin goes up or down each 15 minutes. If you lose, you double your bet next time. If you win, you start over.",
+  spx1h: "You're using a Martingale strategy on S&P 500 hourly direction. You bet on whether the market goes up or down each hour. If you lose, you double your bet next hour.",
+  mlb: "You're betting on whether each MLB inning will have a run scored. If your bet wins, you start over. If it loses, you double your bet next inning.",
+  custom: "You're running a simulation with a custom win probability. This is NOT real market data.",
+};
+
+function PlainEnglishCard({ results, outcomes, market, dataInfo, period, isStale, p, b0, m, N_max }) {
+  const hasOutcomes = !!(outcomes && outcomes.length > 0);
+  const hasResults = !!results;
+  const isSimulated = market === 'custom';
+
+  if (!hasResults || !hasOutcomes) {
+    return (
+      <div className="mb-plain-card mb-plain-card-empty">
+        <span className="mb-plain-tag mono">PLAIN ENGLISH</span>
+        <div className="mb-plain-empty-msg">Run a backtest first to see your plain English summary.</div>
+      </div>
+    );
+  }
+
+  const mkt = MARKETS.find(x => x.id === market);
+  const mktLabel = mkt ? mkt.label : market;
+  const whatImDoing = PLAIN_WHAT_IM_DOING[market] || `You're running a Martingale strategy on ${mktLabel}.`;
+
+  const stats = computeStreaks(outcomes);
+  const { runs, n } = stats;
+  const capCount = runs.filter(r => r >= N_max).length;
+  const capRate = n > 0 ? capCount / n : 0;
+  const perSeqMaxLoss = m === 1 ? b0 * N_max : b0 * (Math.pow(m, N_max) - 1) / (m - 1);
+  const finalBetSize = b0 * Math.pow(m, N_max - 1);
+
+  let verdict;
+  if (results.finalProfit > 0 && capRate < 0.05 && perSeqMaxLoss < 1000) {
+    verdict = {
+      tone: 'green', label: 'GOOD TO GO',
+      msg: 'This setup is profitable with manageable risk. Consider deploying.',
+    };
+  } else if (results.finalProfit > 0) {
+    verdict = {
+      tone: 'yellow', label: 'RISKY',
+      msg: 'This setup is profitable but has elevated risk. Tighten N_max or reduce base bet.',
+    };
+  } else {
+    verdict = {
+      tone: 'red', label: 'BAD BET',
+      msg: 'This setup loses money. Change market, flip bet direction, or adjust strategy parameters.',
+    };
+  }
+
+  const totalSequences = results.realNum || results.profits?.length || 0;
+  const haveDailyMath = period && period.totalDays > 0 && totalSequences > 0;
+  const seqsPerDay = haveDailyMath ? totalSequences / period.totalDays : null;
+  const dailyReturn = haveDailyMath ? results.finalProfit / period.totalDays : null;
+  const capsPerDay = haveDailyMath ? capCount / period.totalDays : null;
+  const fmtCaps = (v) => v >= 1 ? v.toFixed(0) : v.toFixed(2);
+
+  return (
+    <div className="mb-plain-card">
+      <div className="mb-plain-header">
+        <span className="mb-plain-tag mono">PLAIN ENGLISH</span>
+        {isSimulated && <span className="mb-plain-warn-chip mono">SIMULATED DATA</span>}
+        {isStale && dataInfo?.market && (
+          <span className="mb-plain-warn-chip mono">
+            Showing data from {dataInfo.market.toUpperCase()}, not current selection
+          </span>
+        )}
+      </div>
+
+      <div className={`mb-plain-verdict mb-plain-verdict-${verdict.tone}`}>
+        <span className="mb-plain-verdict-label mono">{verdict.label}</span>
+        <span className="mb-plain-verdict-msg">{verdict.msg}</span>
+      </div>
+
+      <div className="mb-plain-sections">
+        <div className="mb-plain-section">
+          <div className="mb-plain-section-head">
+            <HelpCircle size={16} strokeWidth={1.8} />
+            <span className="mono mb-plain-section-label">What am I doing?</span>
+          </div>
+          <div className="mb-plain-section-body">{whatImDoing}</div>
+        </div>
+
+        <div className="mb-plain-section">
+          <div className="mb-plain-section-head">
+            <DollarSign size={16} strokeWidth={1.8} />
+            <span className="mono mb-plain-section-label">How much am I applying?</span>
+          </div>
+          <div className="mb-plain-section-body">
+            Each sequence starts at <span className="mono">${b0}</span>. If you lose, you double to <span className="mono">${Math.round(b0 * m)}</span>, then <span className="mono">${Math.round(b0 * Math.pow(m, 2))}</span>, up to a maximum of <span className="mono">{fmtBankroll(finalBetSize)}</span> per bet. After <span className="mono">{N_max}</span> consecutive losses, the bot stops and accepts a total loss of <span className="mono">{fmtBankroll(perSeqMaxLoss)}</span>.
+          </div>
+        </div>
+
+        <div className="mb-plain-section">
+          <div className="mb-plain-section-head">
+            <TrendingUp size={16} strokeWidth={1.8} />
+            <span className="mono mb-plain-section-label">What is my possible return?</span>
+          </div>
+          <div className="mb-plain-section-body">
+            {!haveDailyMath ? (
+              <>On average, you win <span className="mono">${b0}</span> per sequence. Daily return data is not available yet.</>
+            ) : dailyReturn >= 0 ? (
+              <>On average, you win <span className="mono">${b0}</span> per sequence. With about <span className="mono">{seqsPerDay.toFixed(0)}</span> sequences per day, your expected daily return is approximately <span className="mono">{fmtMoney(dailyReturn)}</span>.</>
+            ) : (
+              <>On average, you LOSE about <span className="mono">{fmtBankroll(Math.abs(dailyReturn))}</span> per day at these settings.</>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-plain-section">
+          <div className="mb-plain-section-head">
+            <AlertCircle size={16} strokeWidth={1.8} />
+            <span className="mono mb-plain-section-label">What is my possible risk?</span>
+          </div>
+          <div className="mb-plain-section-body">
+            Worst case in one sequence: you lose <span className="mono">{fmtBankroll(perSeqMaxLoss)}</span>. This happens about <span className="mono">{fmtCapRate(capRate)}</span> of the time.
+            {capsPerDay !== null && (
+              <> On a typical day, you might hit about <span className="mono">{fmtCaps(capsPerDay)}</span> cap events.</>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-plain-section">
+          <div className="mb-plain-section-head">
+            <Percent size={16} strokeWidth={1.8} />
+            <span className="mono mb-plain-section-label">What is the probability of winning?</span>
+          </div>
+          <div className="mb-plain-section-body">
+            About <span className="mono">{(p * 100).toFixed(0)}%</span> of sequences end in a <span className="mono">${b0}</span> win. About <span className="mono">{fmtCapRate(capRate)}</span> of sequences hit the cap and lose <span className="mono">{fmtBankroll(perSeqMaxLoss)}</span>.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // STREAKS VIEW (v9 Phase 1)
 // ============================================================
 
@@ -4309,6 +4477,141 @@ letter-spacing: 0.08em;
   opacity: 0.85;
 }
 .mb-streak-verdict-sm .mb-streak-verdict-tag { font-size: 9px; padding: 1px 6px; }
+
+/* v9 Phase 3a: Plain English toggle pill in TopBar */
+.mb-plain-toggle {
+  padding: 4px 10px;
+  border-radius: 2px;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  font-family: 'Outfit', -apple-system, system-ui, sans-serif;
+  white-space: nowrap;
+}
+.mb-plain-toggle-off {
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: transparent;
+}
+.mb-plain-toggle-off:hover { color: var(--text); border-color: var(--teal); }
+.mb-plain-toggle-on {
+  border: 1px solid var(--teal);
+  color: var(--teal-bright);
+  background: rgba(61, 110, 82, 0.15);
+  font-weight: 600;
+}
+
+/* v9 Phase 3a: Plain English translation card */
+.mb-plain-card {
+  background: var(--s2);
+  border: 1px solid var(--gold-bright);
+  border-radius: 4px;
+  padding: var(--sp-md);
+  margin: 0 var(--sp-md) var(--sp-md);
+}
+.mb-plain-card-empty {
+  text-align: center;
+  padding: var(--sp-md);
+}
+.mb-plain-empty-msg {
+  color: var(--muted);
+  margin-top: var(--sp-sm);
+  font-size: var(--fs-md);
+}
+.mb-plain-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+  margin-bottom: var(--sp-sm);
+  flex-wrap: wrap;
+}
+.mb-plain-tag {
+  color: var(--gold-bright);
+  text-transform: uppercase;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.12em;
+  font-weight: 600;
+}
+.mb-plain-warn-chip {
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(199, 162, 107, 0.18);
+  color: var(--gold-bright);
+  border: 1px solid rgba(199, 162, 107, 0.35);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+}
+.mb-plain-verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-md);
+  padding: var(--sp-md);
+  border: 1px solid;
+  border-radius: 4px;
+  margin-bottom: var(--sp-md);
+}
+.mb-plain-verdict-label {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  flex: 0 0 auto;
+}
+.mb-plain-verdict-msg {
+  flex: 1;
+  font-size: var(--fs-md);
+  line-height: 1.4;
+}
+.mb-plain-verdict-green {
+  background: rgba(61, 110, 82, 0.18);
+  border-color: var(--teal-bright);
+}
+.mb-plain-verdict-green .mb-plain-verdict-label,
+.mb-plain-verdict-green .mb-plain-verdict-msg { color: var(--teal-bright); }
+.mb-plain-verdict-yellow {
+  background: rgba(212, 183, 135, 0.18);
+  border-color: var(--gold-bright);
+}
+.mb-plain-verdict-yellow .mb-plain-verdict-label,
+.mb-plain-verdict-yellow .mb-plain-verdict-msg { color: var(--gold-bright); }
+.mb-plain-verdict-red {
+  background: rgba(196, 69, 69, 0.18);
+  border-color: var(--red-bright);
+}
+.mb-plain-verdict-red .mb-plain-verdict-label,
+.mb-plain-verdict-red .mb-plain-verdict-msg { color: var(--red-bright); }
+.mb-plain-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-md);
+}
+.mb-plain-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mb-plain-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+.mb-plain-section-label {
+  text-transform: uppercase;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.mb-plain-section-body {
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  color: var(--text);
+  padding-left: 24px;
+}
+@media (max-width: 560px) {
+  .mb-plain-verdict { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .mb-plain-section-body { padding-left: 0; }
+}
 
 /* v8.2: Disclaimer footer */
 .mb-disclaimer {
