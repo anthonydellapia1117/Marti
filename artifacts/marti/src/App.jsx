@@ -794,7 +794,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.2.2-skip-to-expert',
+version: 'v9.3-working-capital',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1117,7 +1117,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.2.2-skip-to-expert</span>
+<span className="mb-brand-ver mono">v9.3-working-capital</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -3604,9 +3604,9 @@ function GuidedScreen1({ onNext, onSkipToExpert }) {
 function GuidedScreen2({ inputs, setInputs, onBack, onNext, onShowWelcome }) {
   const { bankroll, dailyBudget, comfort } = inputs;
   let error = null;
-  if (bankroll < 100) error = 'Bankroll too small to be meaningful.';
-  else if (dailyBudget < 10) error = 'Daily budget too small for any viable strategy.';
-  else if (dailyBudget > bankroll) error = "Daily budget can't exceed your total bankroll.";
+  if (bankroll < 100) error = 'Working capital too small to be meaningful.';
+  else if (dailyBudget < 10) error = 'Daily allocation too small for any viable deployment.';
+  else if (dailyBudget > bankroll) error = "Daily allocation can't exceed your working capital.";
 
   return (
     <div className="mb-guided-card mb-guided-anim">
@@ -3620,10 +3620,14 @@ function GuidedScreen2({ inputs, setInputs, onBack, onNext, onShowWelcome }) {
 
       <div className="mb-guided-field">
         <label className="mb-guided-field-label">
-          How much money would you put aside for this?
-          <HelpIcon title="Your total bankroll" explanation="What you'd risk on this strategy over time. Bigger means more buffer for bad days, but ties up more capital." example="$10k is a typical start. $50k is serious." />
+          How much capital are you depositing into Marti?
+          <HelpIcon
+            title="What is working capital?"
+            explanation="The funds you deposit into Marti for the bot to execute the strategy. Because each sequence's loss is bounded by the predetermined cap (set via historical streak analysis), your principal is protected from catastrophic loss. Cumulative wins are designed to outpace cumulative cap events over time."
+            example="$50,000 working capital with $375 max-loss-per-cap means even 100 consecutive cap events (statistically vanishingly rare) only depletes 75% of principal."
+          />
         </label>
-        <p className="mb-guided-field-sub">Your total bankroll — what you'd risk on this strategy over time, not what you'd bet each day.</p>
+        <p className="mb-guided-field-sub">Your working capital — the funds Marti draws from to execute the strategy. The cap mechanism limits any single-sequence loss to a predetermined maximum (set via historical streak analysis), so your principal is protected from catastrophic loss. This isn't money at risk like a wager — it's capital deployed by the bot to recover prior bets and return to baseline.</p>
         <input
           type="number" min={100} max={10_000_000} step={100}
           value={bankroll}
@@ -3635,10 +3639,14 @@ function GuidedScreen2({ inputs, setInputs, onBack, onNext, onShowWelcome }) {
 
       <div className="mb-guided-field">
         <label className="mb-guided-field-label">
-          How much are you OK losing per day at the worst?
-          <HelpIcon title="Daily allocation" explanation="The most you'd be willing to lose in one bad day. Marti uses this to size your bets." example="$1,500/day = mid-tier serious. $500/day = cautious." />
+          What's your daily capital allocation?
+          <HelpIcon
+            title="What is daily capital allocation?"
+            explanation="Maximum capital the bot deploys in active bets per day. The cap mechanism keeps this bounded. Sizing this larger means bigger position sizes and bigger per-win returns, with proportionally bigger per-cap losses."
+            example="$1,500 daily allocation with $25 base bet means up to 60 active sequence-slots before the bot pauses for the day."
+          />
         </label>
-        <p className="mb-guided-field-sub">Your daily allocation. Bigger means bigger potential wins but bigger swings.</p>
+        <p className="mb-guided-field-sub">The maximum capital the bot will deploy across active sequences in a single day. This bounds the bot's operating room, not your expected loss. Larger allocation = larger position sizes and bigger per-win returns.</p>
         <input
           type="number" min={10} max={100_000} step={10}
           value={dailyBudget}
@@ -3650,12 +3658,12 @@ function GuidedScreen2({ inputs, setInputs, onBack, onNext, onShowWelcome }) {
 
       <div className="mb-guided-field">
         <label className="mb-guided-field-label">How careful do you want to be?</label>
-        <p className="mb-guided-field-sub">Pick the trade-off between bigger wins and lower risk.</p>
+        <p className="mb-guided-field-sub">Pick the trade-off between bigger wins and tighter cap discipline.</p>
         <div className="mb-guided-comfort-grid">
           {[
-            { id: 'most_careful', label: 'Most careful', sub: 'Small wins, tiny risk of big losses', help: { title: 'Most careful', explanation: 'Smaller bets, lower win amounts, but very rare big losses.', example: 'Maybe $24/day average gain but almost never a bad day.' } },
-            { id: 'balanced', label: 'Balanced', sub: 'Medium wins, low risk — good default', help: { title: 'Balanced', explanation: 'Mid-sized bets with manageable downside.', example: 'Maybe $240/day average gain with occasional bad days.' } },
-            { id: 'aggressive', label: 'Aggressive', sub: 'Bigger wins, more risk of bad days', help: { title: 'Aggressive', explanation: 'Bigger bets, bigger wins, but more bad days.', example: 'Maybe $535/day average gain, harder days more frequent.' } },
+            { id: 'most_careful', label: 'Most careful', sub: 'Small wins, tightest cap discipline — rarely hits cap events', help: { title: 'Most careful', explanation: 'Smaller position sizes; the bot keeps cap exposure to a minimum.', example: 'Maybe $24/day average gain with rare cap events.' } },
+            { id: 'balanced', label: 'Balanced', sub: 'Medium wins, moderate cap exposure — good default', help: { title: 'Balanced', explanation: 'Mid-sized positions with predictable cap frequency.', example: 'Maybe $240/day average gain with occasional cap events.' } },
+            { id: 'aggressive', label: 'Aggressive', sub: 'Bigger wins, more frequent cap events', help: { title: 'Aggressive', explanation: 'Larger positions; cap events occur more often but per-win returns are larger.', example: 'Maybe $535/day average gain, cap events more frequent.' } },
           ].map(opt => (
             <div
               key={opt.id}
@@ -3763,8 +3771,8 @@ function GuidedScreen3({ inputs, onBack, onNext }) {
   if (recommendation.kind === 'ok') {
     const p = recommendation.primary;
     if (p.pRuin < 0.01 && p.expectedDailyProfit > 0) verdict = { tone: 'green', label: 'GOOD TO GO', Icon: CheckCircle };
-    else if (p.expectedDailyProfit > 0) verdict = { tone: 'yellow', label: 'RISKY', Icon: AlertTriangle };
-    else verdict = { tone: 'red', label: 'BAD BET', Icon: XCircle };
+    else if (p.expectedDailyProfit > 0) verdict = { tone: 'yellow', label: 'BORDERLINE', Icon: AlertTriangle };
+    else verdict = { tone: 'red', label: 'UNDER-SIZED', Icon: XCircle };
   } else if (recommendation.kind === 'none_viable' || recommendation.kind === 'no_data') {
     verdict = { tone: 'red', label: 'NO SAFE PLAY', Icon: XCircle };
   }
@@ -3806,15 +3814,15 @@ function GuidedScreen3({ inputs, onBack, onNext }) {
                 <div className={`mb-guided-stat-value mono ${daily >= 0 ? 'pos' : 'neg'}`}>{fmtMoney(daily)}</div>
               </div>
               <div className="mb-guided-stat">
-                <div className="mb-guided-stat-label">Worst possible day <HelpIcon title="The biggest single-day loss" explanation="Your daily allocation — if everything goes wrong in one day, this is your max pain." example="-$1,500 means you set $1,500 as your daily allocation, so that's your worst case." /></div>
+                <div className="mb-guided-stat-label">Max daily drawdown <HelpIcon title="What is max daily drawdown?" explanation="On a bad day where multiple sequences hit the cap, this is the maximum you could be down before recovery on subsequent days. Bounded by your daily allocation choice. NOT a permanent loss — the strategy is designed to recover this over subsequent winning days." example="-$1,500 max drawdown means even your worst day stays within your daily allocation." /></div>
                 <div className="mb-guided-stat-value mono neg">-{formatCurrency(dailyBudget)}</div>
               </div>
               <div className="mb-guided-stat">
-                <div className="mb-guided-stat-label">Bankroll lasts (worst case) <HelpIcon title="How long your money holds out" explanation="If you hit your worst possible day consecutively, this is how many days before your bankroll is depleted." example="~24 days means even with terrible luck repeated daily, you'd have over 3 weeks before running dry." /></div>
+                <div className="mb-guided-stat-label">Capital runway (worst case) <HelpIcon title="What is capital runway?" explanation="How many consecutive worst-case days your working capital can absorb before depletion. Higher = more buffer for sustained adverse streaks." example="~24 days runway means even hitting worst-case drawdown daily for over 3 weeks, you'd still have capital remaining." /></div>
                 <div className="mb-guided-stat-value mono gold">~{Number.isFinite(p.daysToDeplete) ? Math.round(p.daysToDeplete).toLocaleString() : '∞'} days</div>
               </div>
               <div className="mb-guided-stat">
-                <div className="mb-guided-stat-label">Chance you go broke (30d) <HelpIcon title="Probability of ruin" explanation="The chance you lose your entire bankroll within 30 days, based on real market data." example="<0.01% means basically zero. Above 5% means real risk." /></div>
+                <div className="mb-guided-stat-label">Ruin probability (30 days) <HelpIcon title="What is ruin probability?" explanation="Statistical likelihood of your working capital being depleted within 30 days, given your inputs and the strategy's historical streak distribution. Below 1% is safe. Above 5% means under-sized capital for the cap mechanism." example="<0.01% ruin probability means depletion within 30 days is statistically negligible given the strategy's historical behavior." /></div>
                 <div className="mb-guided-stat-value mono pos">{fmtCapRate(p.pRuin)}</div>
               </div>
             </div>
@@ -3830,7 +3838,7 @@ function GuidedScreen3({ inputs, onBack, onNext }) {
             <div className="mb-guided-plan-sub">
               {recommendation.kind === 'no_data'
                 ? 'Could not load market data. Try again in a moment.'
-                : 'Your daily budget is too small relative to your bankroll, or your bankroll is too small for any market we test. Try increasing your daily budget or your bankroll.'}
+                : 'Your daily allocation is too small relative to your working capital, or your working capital is too small for the cap mechanism to be effective on any market we test. Try increasing your daily allocation or your working capital.'}
             </div>
           </div>
         </>
@@ -4104,7 +4112,7 @@ function GuidedScreen5({ inputs, onBack, onSeeFullMath }) {
           <div className={`mb-guided-stat-value mono ${sim.bestDay >= 0 ? 'pos' : 'neg'}`}>{fmtMoney(sim.bestDay)}</div>
         </div>
         <div className="mb-guided-stat">
-          <div className="mb-guided-stat-label">Worst day</div>
+          <div className="mb-guided-stat-label">Max daily drawdown</div>
           <div className={`mb-guided-stat-value mono ${sim.worstDay >= 0 ? 'pos' : 'neg'}`}>{fmtMoney(sim.worstDay)}</div>
         </div>
       </div>
