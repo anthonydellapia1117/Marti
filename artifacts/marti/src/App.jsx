@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef, useId } from 'react';
 import {
 LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
 ResponsiveContainer, ReferenceLine, Cell, Area, AreaChart, CartesianGrid
@@ -759,7 +759,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.0.1-ruin-filter',
+version: 'v9.0.2-clickable',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1046,7 +1046,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.0.1-ruin-filter</span>
+<span className="mb-brand-ver mono">v9.0.2-clickable</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -1306,6 +1306,7 @@ const isLive = mode === 'live';
 const tiles = [
 {
 label: "TODAY'S P&L",
+help: { title: "What is P&L?", explanation: "Profit and Loss — how much money you've made or lost today from this strategy.", example: "+$10 means you'd be up $10 today. −$50 means down $50." },
 value: fmtMoney(moneyBreakdown.today?.pnl || 0, 0),
 positive: (moneyBreakdown.today?.pnl || 0) >= 0,
 primary: true,
@@ -1332,6 +1333,7 @@ date: `avg ${fmtMoney(moneyBreakdown.avgDaily, 0)}/day`
 },
 {
 label: "WORST SEQUENCE",
+help: { title: "What is the worst sequence?", explanation: "The biggest single loss you've taken — when the bot hit the N_max cap and accepted the full ladder loss.", example: "−$315 means one sequence lost $315 after 6 consecutive losing bets." },
 value: fmtMoney(-expectedWorst, 0),
 positive: false,
 danger: true,
@@ -1340,6 +1342,7 @@ date: `${(results.capRate * 100).toFixed(3)}% rate`
 },
 {
 label: "MAX EXPOSURE",
+help: { title: "What is max exposure?", explanation: "The most money tied up at any one moment across all active sequences.", example: "−$495 with 5 parallel chains means at peak, 5 sequences were active at the same time, putting that total at risk." },
 value: concurrent ? fmtMoney(-concurrent.maxExposure, 0) : '—',
 positive: false,
 gold: true,
@@ -1360,7 +1363,7 @@ return (
 <div className="mb-mtiles">
 {tiles.map((t, i) => (
 <div key={i} className={`mb-mtile ${t.primary ? 'mb-mtile-primary' : ''}`}>
-<div className="mb-mtile-label">{t.label}</div>
+<div className="mb-mtile-label">{t.label}{t.help && <HelpIcon {...t.help} />}</div>
 <div className={`mb-mtile-value mono ${t.danger ? 'neg' : t.gold ? 'gold' : t.positive ? 'pos' : 'neg'}`}>
 {t.value}
 </div>
@@ -2447,7 +2450,7 @@ exportState={exportState}
 
   <div className="mb-parambar">
     <ParamControl
-      label={market === 'custom' ? 'p' : 'p̂'}
+      label={<>{market === 'custom' ? 'p' : 'p̂'} <HelpIcon title="What is the win rate?" explanation="How often a single bet wins. 50% means each bet is a coin flip." example="BTC 15-minute price changes win about 50% of the time (almost a true coin flip)." /></>}
       hint={market === 'custom' ? 'Win prob' : 'Observed win rate'}
       value={`${(p * 100).toFixed(1)}%`}
     >
@@ -2474,7 +2477,7 @@ exportState={exportState}
     <ParamControl label={<>N <Hint term="N_max (cap)">Max consecutive losses before the bot gives up on a sequence and accepts the cumulative loss. Caps tail risk at the cost of conceding some sequences.</Hint></>} hint="Max steps">
       <NumberField value={N_max} onCommit={setNMax} defaultValue={6} min={2} max={12} step={1} integer ariaLabel="Max ladder steps" />
     </ParamControl>
-    <ParamControl label="#" hint="Sequences">
+    <ParamControl label={<># <HelpIcon title="What is a sequence?" explanation="One round of the betting strategy from start to end (either a win or hitting the cap)." example="10,000 sequences means we simulate 10,000 separate rounds to see the overall results." /></>} hint="Sequences">
       <NumberField value={num} onCommit={setNum} defaultValue={10000} min={100} max={50000} step={1000} integer ariaLabel="Sequence count" />
     </ParamControl>
     <div className="mb-param-actions">
@@ -2757,6 +2760,7 @@ rows: period ? [
 },
 {
 title: 'BREAKEVEN EDGE',
+help: { title: "What is breakeven edge?", explanation: "The win rate you'd need for the strategy to come out neutral (no profit, no loss).", example: "54.67% breakeven means: if you win 54.67% of bets, you'd break even. Above that is profit, below is loss." },
 headline: `${(breakevenP * 100).toFixed(2)}%`,
 headlineColor: 'gold',
 rows: [
@@ -2779,6 +2783,7 @@ rows: [
 },
 {
 title: 'TAIL RISK',
+help: { title: "What is tail risk?", explanation: "Rare but devastating events — the small chance of a big loss.", example: "1 in 66 chance of hitting the cap means once every 66 sequences you lose the full per-sequence max." },
 headline: theoreticalCap > 0 ? `1 in ${Math.round(1 / theoreticalCap).toLocaleString()}` : '—',
 rows: [
 ['Theoretical', `${(theoreticalCap * 100).toFixed(3)}%`],
@@ -2869,7 +2874,7 @@ insight.headlineColor === 'gold' ? 'gold' :
 insight.headlineColor === 'red' ? 'neg' : '';
 return (
 <div className="mb-insight">
-<div className="mb-insight-title">{insight.title}</div>
+<div className="mb-insight-title">{insight.title}{insight.help && <HelpIcon {...insight.help} />}</div>
 <div className={`mb-insight-headline mono ${headlineClass}`}>
 {insight.headline}
 </div>
@@ -3048,6 +3053,64 @@ function NumberField({ value, onCommit, defaultValue, min, max, step = 1, intege
         aria-label={`Reset to ${defaultValue}`}
       >×</button>
     </div>
+  );
+}
+
+// v9.0.2: Structured help popover with title/explanation/example. Single-open across the app
+// (opening one fires a custom event that closes any other open instance). Mobile uses a
+// centered modal-style position with a backdrop instead of an inline tooltip.
+function HelpIcon({ title, explanation, example }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  useEffect(() => {
+    if (!open) return;
+    const onOtherOpen = (e) => { if (e.detail !== id) setOpen(false); };
+    const onDocClick = (e) => {
+      const t = e.target;
+      if (t && (t.closest('.mb-help-popup') || t.closest('.mb-help-icon'))) return;
+      setOpen(false);
+    };
+    const onEsc = (e) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('mb-help-open', onOtherOpen);
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      window.removeEventListener('mb-help-open', onOtherOpen);
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [open, id]);
+  const toggle = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!open) window.dispatchEvent(new CustomEvent('mb-help-open', { detail: id }));
+    setOpen(o => !o);
+  };
+  return (
+    <span className="mb-help-wrap">
+      <button
+        type="button"
+        className="mb-help-icon"
+        onClick={toggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggle(e); }}
+        aria-label={`Help: ${title}`}
+        aria-expanded={open}
+      >
+        <HelpCircle size={14} strokeWidth={1.8} />
+      </button>
+      {open && (
+        <>
+          <span className="mb-help-backdrop" onClick={() => setOpen(false)} />
+          <span className="mb-help-popup" role="tooltip">
+            <span className="mb-help-popup-title mono">{title}</span>
+            <span className="mb-help-popup-explanation">{explanation}</span>
+            {example && (
+              <span className="mb-help-popup-example">Example: {example}</span>
+            )}
+          </span>
+        </>
+      )}
+    </span>
   );
 }
 
@@ -3863,7 +3926,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
       <section className="mb-section">
         <div className="mb-section-head">
           <div>
-            <h2 className="mb-section-title">Bankroll &amp; Cap Analysis</h2>
+            <h2 className="mb-section-title">Bankroll &amp; Cap Analysis <HelpIcon title="What is this section?" explanation="Compares two strategies: one where you cap losses at N steps (smart), versus one where you don't cap (need a huge bankroll)." example="Capping at 6 steps: max loss $315. Uncapped: max loss $42 million. Capping is what makes the strategy practical." /></h2>
             <p className="mb-section-sub">The deployed strategy caps at N_max losses and accepts the per-sequence drawdown. Uncapped survival is shown only as a reference point.</p>
           </div>
         </div>
@@ -5360,6 +5423,121 @@ letter-spacing: 0.08em;
 .mb-hint-popup strong { color: var(--gold-bright); font-weight: 600; }
 @media (max-width: 560px) {
   .mb-hint-popup { width: 180px; }
+}
+
+/* v9.0.2: HelpIcon — richer help popover with structured title/explanation/example. */
+.mb-help-wrap { position: relative; display: inline-block; vertical-align: middle; margin-left: 4px; }
+.mb-help-icon {
+  display: inline-flex;
+  align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: help;
+  border-radius: 50%;
+  transition: color 0.15s, background 0.15s;
+}
+.mb-help-icon:hover, .mb-help-icon[aria-expanded="true"] {
+  color: var(--teal-bright);
+  background: rgba(61, 110, 82, 0.10);
+}
+.mb-help-icon:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 1px;
+}
+.mb-help-popup {
+  position: absolute;
+  z-index: 200;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--s2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--gold);
+  border-radius: 4px;
+  padding: 10px 12px;
+  width: 280px;
+  max-width: 80vw;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  text-align: left;
+  white-space: normal;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.mb-help-popup-title {
+  color: var(--gold-bright);
+  text-transform: uppercase;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.mb-help-popup-explanation {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  font-family: 'Outfit', -apple-system, system-ui, sans-serif;
+}
+.mb-help-popup-example {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-style: italic;
+  line-height: 1.45;
+  font-family: 'Outfit', -apple-system, system-ui, sans-serif;
+}
+.mb-help-backdrop { display: none; }
+@media (max-width: 560px) {
+  .mb-help-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 150;
+  }
+  .mb-help-popup {
+    position: fixed;
+    top: 50%;
+    bottom: auto;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(320px, 88vw);
+    z-index: 200;
+  }
+}
+
+/* v9.0.2: Button affordances — focus-visible rings, subtle hover lift, clearer active states */
+.mb-tab:focus-visible,
+.mb-segbtn:focus-visible,
+.mb-opsbar-mode:focus-visible,
+.mb-preset-btn:focus-visible,
+.mb-bottomnav-item:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+.mb-tab:not(.mb-tab-active):hover {
+  background: rgba(61, 110, 82, 0.05);
+}
+.mb-segbtn:not(.mb-segbtn-active) {
+  border: 1px solid transparent;
+}
+.mb-segbtn:not(.mb-segbtn-active):hover {
+  border-color: rgba(61, 110, 82, 0.25);
+  background: rgba(61, 110, 82, 0.04);
+}
+.mb-segbtn-active {
+  border: 1px solid rgba(61, 110, 82, 0.45);
+}
+.mb-preset-btn { transition: border-color 0.15s, background 0.15s, transform 0.12s; }
+.mb-preset-btn:hover:not(:disabled) { transform: translateY(-1px); }
+.mb-preset-btn:active { transform: translateY(0); }
+.mb-opsbar-mode:not(.mb-opsbar-mode-active):hover {
+  background: rgba(138, 133, 120, 0.06);
 }
 
 /* v9 Polish: keep TopBar toggle visible on very narrow screens */
