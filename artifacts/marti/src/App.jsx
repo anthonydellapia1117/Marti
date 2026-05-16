@@ -6,7 +6,7 @@ ResponsiveContainer, ReferenceLine, Cell, Area, AreaChart, CartesianGrid
 import {
 Activity, Layers, BarChart3, Bitcoin, Target, Settings2,
 ChevronRight, Play, Circle, AlertCircle, Hexagon, ArrowUp, ArrowDown,
-MessageSquare, Send, Sparkles, Download, Keyboard, Zap
+MessageSquare, Send, Sparkles, Download, Keyboard, Zap, Flame
 } from 'lucide-react';
 
 // ============================================================
@@ -398,6 +398,51 @@ for (const o of outcomes) if (o.win === 1) w++;
 return w / outcomes.length;
 }
 
+// v9 Phase 1: Streak analysis view per Pete's framework
+// Walks a binary outcome sequence (each item {win: 0|1}) and returns all consecutive
+// same-direction run lengths plus distribution stats. Theoretical expected counts use
+// the symmetric extension of the spec formula N*p^k*(1-p): for each length k we sum
+// both win-runs (N*p^k*(1-p)) and loss-runs (N*(1-p)^k*p), since the empirical
+// distribution includes runs in both directions.
+function computeStreaks(outcomes) {
+  const empty = {
+    runs: [], distribution: [], max: 0, mean: 0, median: 0,
+    total: 0, winRate: 0.5, n: 0
+  };
+  if (!outcomes || outcomes.length === 0) return empty;
+  const runs = [];
+  let curLen = 1;
+  let curVal = outcomes[0].win;
+  for (let i = 1; i < outcomes.length; i++) {
+    if (outcomes[i].win === curVal) {
+      curLen++;
+    } else {
+      runs.push(curLen);
+      curLen = 1;
+      curVal = outcomes[i].win;
+    }
+  }
+  runs.push(curLen);
+  const n = outcomes.length;
+  const p = outcomes.reduce((s, o) => s + (o.win === 1 ? 1 : 0), 0) / n;
+  const max = runs.reduce((a, b) => Math.max(a, b), 0);
+  const sum = runs.reduce((a, b) => a + b, 0);
+  const mean = runs.length > 0 ? sum / runs.length : 0;
+  const sorted = [...runs].sort((a, b) => a - b);
+  const median = sorted.length === 0 ? 0
+    : sorted.length % 2 === 1 ? sorted[(sorted.length - 1) >> 1]
+    : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
+  const counts = new Map();
+  for (const r of runs) counts.set(r, (counts.get(r) || 0) + 1);
+  const distribution = [];
+  for (let k = 1; k <= max; k++) {
+    const empirical = counts.get(k) || 0;
+    const theoretical = n * (Math.pow(p, k) * (1 - p) + Math.pow(1 - p, k) * p);
+    distribution.push({ length: k, empirical, theoretical });
+  }
+  return { runs, distribution, max, mean, median, total: runs.length, winRate: p, n };
+}
+
 const MARKETS = [
 { id: 'btc15', label: 'BTC 15m', sub: 'Up / Down', icon: Bitcoin, p: 0.52, mpu: 15, unit: 'bar', continuous: true,
 intervalType: '15min bar', intervalsPerDay: 96, intervalShort: 'bar', intervalLong: '15-minute bar',
@@ -485,6 +530,7 @@ const [running, setRunning] = useState(false);
 const [results, setResults] = useState(null);
 const [scenarios, setScenarios] = useState(null);
 const [concurrent, setConcurrent] = useState(null);
+const [rawOutcomes, setRawOutcomes] = useState(null);
 const [runCount, setRunCount] = useState(0);
 const [now, setNow] = useState(new Date());
 const [autoSeed, setAutoSeed] = useState(0);
@@ -511,6 +557,12 @@ const scens = SCENARIOS.map(s => ({
 ...simulate({ p: s.p, b0, m, N_max, r: 1.0, num: Math.min(num, 5000) })
 }));
 const conc = simulateConcurrent(p, b0, m, N_max, 5, 8000);
+// v9 Phase 1: synthesize a binary outcome stream from p so Streaks tab has data
+const simN = Math.max(num, 2000);
+const simOutcomes = new Array(simN);
+const t0 = Date.now() - simN * 60000;
+for (let i = 0; i < simN; i++) simOutcomes[i] = { t: t0 + i * 60000, win: Math.random() < p ? 1 : 0 };
+setRawOutcomes(simOutcomes);
 setResults(main);
 setScenarios(scens);
 setConcurrent(conc);
@@ -524,6 +576,7 @@ throw new Error(`No outcomes returned for ${market}. Try Refresh data or a diffe
 const obsP = observedWinRate(payload.outcomes);
 const main = buildSequencesFromOutcomes(payload.outcomes, b0, m, N_max, 1.0);
 if (!main) throw new Error('Could not build any sequences from real outcomes.');
+setRawOutcomes(payload.outcomes);
 setP(obsP);
 const scens = SCENARIOS.map(s => ({
 ...s,
@@ -670,7 +723,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v8.2',
+version: 'v9.0-streaks-preview',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -815,6 +868,14 @@ return (
         intervalData={intervalData}
       />
     )}
+    {view === 'streaks' && (
+      <StreaksView
+        outcomes={rawOutcomes}
+        market={market}
+        dataInfo={dataInfo}
+        isStale={isStale}
+      />
+    )}
     {view === 'askmarty' && (
       <AskMartyView
         results={results}
@@ -928,7 +989,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v8.2</span>
+<span className="mb-brand-ver mono">v9.0-streaks-preview</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -953,6 +1014,7 @@ const tabs = [
 { id: 'overview', label: 'Overview' },
 { id: 'workspace', label: 'Workspace' },
 { id: 'insights', label: 'Insights' },
+{ id: 'streaks', label: 'Streaks' },
 { id: 'askmarty', label: 'Ask Marti', special: true }
 ];
 return (
@@ -976,6 +1038,7 @@ const tabs = [
 { id: 'overview', label: 'Overview', icon: BarChart3 },
 { id: 'workspace', label: 'Workspace', icon: Layers },
 { id: 'insights', label: 'Insights', icon: Activity },
+{ id: 'streaks', label: 'Streaks', icon: Flame },
 { id: 'askmarty', label: 'Marti', icon: Sparkles }
 ];
 return (
@@ -2899,6 +2962,160 @@ return (
 );
 }
 
+// ============================================================
+// STREAKS VIEW (v9 Phase 1)
+// ============================================================
+
+function StreaksView({ outcomes, market, dataInfo, isStale }) {
+  if (!outcomes || outcomes.length === 0) {
+    return (
+      <div className="mb-view">
+        <section className="mb-section">
+          <div className="mb-section-head">
+            <div>
+              <h2 className="mb-section-title">Streak analysis</h2>
+              <p className="mb-section-sub">Consecutive-direction runs in the outcome stream</p>
+            </div>
+          </div>
+          <div className="mb-streak-empty">
+            <Flame size={28} strokeWidth={1.5} />
+            <div className="mono mb-streak-empty-text">Run a backtest to see streak analysis</div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  const mkt = MARKETS.find(x => x.id === market);
+  const mktLabel = mkt ? mkt.label : market;
+  const stats = computeStreaks(outcomes);
+  const { distribution, max, mean, median, total, winRate, n } = stats;
+  const isSimulated = market === 'custom';
+  const showLimitedSample = !isSimulated && n < 1000;
+  const showSpxDisclosure = market === 'spx1h';
+  const showMlbBanner = market === 'mlb' && winRate < 0.40 && !isStale;
+
+  const theoreticalMax = Math.max(...distribution.map(d => d.theoretical), 0);
+  const divergencePct = theoreticalMax > 0 ? ((max - theoreticalMax) / theoreticalMax) * 100 : 0;
+  const divergenceAbove = divergencePct > 0;
+
+  let insight;
+  if (Math.abs(divergencePct) < 25) {
+    insight = `${mktLabel} max streak of ${max} aligns closely with random-walk theoretical max of ${theoreticalMax.toFixed(1)}, consistent with a near-coin-flip market.`;
+  } else if (divergenceAbove) {
+    insight = `${mktLabel} max streak of ${max} exceeds theoretical ${theoreticalMax.toFixed(1)} by ${divergencePct.toFixed(0)}%, suggesting non-random clustering — fund the bot to survive at least ${max} + safety margin.`;
+  } else {
+    insight = `${mktLabel} max streak of ${max} is ${Math.abs(divergencePct).toFixed(0)}% below theoretical ${theoreticalMax.toFixed(1)}; observed streaks are tamer than random-walk would predict.`;
+  }
+
+  return (
+    <div className="mb-view">
+      {showMlbBanner && (
+        <div className="mb-mlbdir-banner">
+          <span className="mb-mlbdir-tag mono">MLB DIRECTION</span>
+          <span className="mb-mlbdir-msg">
+            Streak analysis below counts runs of "score" and "no score" outcomes. MLB innings score only ~{(winRate * 100).toFixed(0)}% of the time, so long "no score" runs dominate — fund-to-survive applies to the loss direction here.
+          </span>
+        </div>
+      )}
+
+      <section className="mb-section">
+        <div className="mb-section-head">
+          <div>
+            <h2 className="mb-section-title">Streak analysis · {mktLabel}</h2>
+            <p className="mb-section-sub">
+              {n.toLocaleString()} outcomes
+              {showLimitedSample && (
+                <span
+                  className="mb-sample-chip mono"
+                  title="Sample size below 1,000 outcomes. Streak distribution may be noisy."
+                > LIMITED SAMPLE</span>
+              )}
+              {' '}· observed win rate <span className="mono">{(winRate * 100).toFixed(2)}%</span>
+              {isSimulated && <span className="mb-streak-sim-tag mono"> SIMULATED</span>}
+            </p>
+          </div>
+        </div>
+
+        {isSimulated && (
+          <div className="mb-spx-disclosure">
+            Custom mode: outcomes are simulated from win probability p, not real market data. Run BTC, SPX, or MLB to analyze historical streaks.
+          </div>
+        )}
+
+        {showSpxDisclosure && (
+          <div className="mb-spx-disclosure">
+            SPX market uses SPY ETF as a 1:1 directional proxy for the S&amp;P 500. Streaks reflect raw bar-direction outcomes; non-parity contract pricing on real prediction markets is not modeled.
+          </div>
+        )}
+
+        <div className="mb-kpistrip mb-streak-kpis">
+          <div className="mb-kpi mb-kpi-primary">
+            <div className="mb-kpi-label">Max streak</div>
+            <div className="mb-kpi-value mono gold">{max}</div>
+          </div>
+          <div className="mb-kpi">
+            <div className="mb-kpi-label">Mean</div>
+            <div className="mb-kpi-value mono">{mean.toFixed(2)}</div>
+          </div>
+          <div className="mb-kpi">
+            <div className="mb-kpi-label">Median</div>
+            <div className="mb-kpi-value mono">{median.toFixed(1)}</div>
+          </div>
+          <div className="mb-kpi">
+            <div className="mb-kpi-label">Total streaks</div>
+            <div className="mb-kpi-value mono">{total.toLocaleString()}</div>
+          </div>
+        </div>
+
+        <div className="mb-streak-divergence">
+          <span className="mono mb-streak-divergence-label">Empirical max vs theoretical</span>
+          <span className={`mono mb-streak-divergence-val ${divergenceAbove ? 'neg' : 'pos'}`}>
+            {divergenceAbove ? '+' : ''}{divergencePct.toFixed(1)}%
+          </span>
+          <span className="mb-streak-divergence-detail dim">
+            ({max} observed · {theoreticalMax.toFixed(1)} theoretical)
+          </span>
+        </div>
+
+        <div className="mb-streak-insight">
+          {insight}
+        </div>
+
+        <div className="mb-section-head mb-section-head-tight">
+          <h3 className="mb-section-title-sm">Streak length distribution</h3>
+          <span className="mb-section-meta mono">empirical vs theoretical</span>
+        </div>
+        <div className="mb-chart-lg">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={distribution} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="2 4" stroke="#2a2d33" vertical={false} />
+              <XAxis dataKey="length" stroke="#52524a" tick={{ fontSize: 10, fill: '#8a8578', fontFamily: 'JetBrains Mono, monospace' }} axisLine={{ stroke: '#2a2d33' }} tickLine={false} />
+              <YAxis stroke="#52524a" tick={{ fontSize: 10, fill: '#8a8578', fontFamily: 'JetBrains Mono, monospace' }} axisLine={{ stroke: '#2a2d33' }} tickLine={false} width={50} />
+              <Tooltip
+                contentStyle={{ background: '#14161a', border: '1px solid #2a2d33', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}
+                labelFormatter={(l) => `Length ${l}`}
+                formatter={(v, k) => [typeof v === 'number' ? v.toFixed(k === 'theoretical' ? 1 : 0) : v, k === 'theoretical' ? 'Theoretical' : 'Empirical']}
+              />
+              <Bar dataKey="empirical" radius={[2, 2, 0, 0]} barSize={18}>
+                {distribution.map((d, i) => (
+                  <Cell key={i} fill={d.length === max ? '#c7a26b' : '#5a9978'} />
+                ))}
+              </Bar>
+              <Bar dataKey="theoretical" radius={[2, 2, 0, 0]} barSize={6} fill="#d4b787" fillOpacity={0.85} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="mb-streak-legend">
+          <span className="mb-streak-legend-item"><span className="mb-streak-swatch" style={{ background: '#5a9978' }}></span>Empirical (both directions)</span>
+          <span className="mb-streak-legend-item"><span className="mb-streak-swatch" style={{ background: '#c7a26b' }}></span>Max observed</span>
+          <span className="mb-streak-legend-item"><span className="mb-streak-swatch" style={{ background: '#d4b787' }}></span>Theoretical (random walk)</span>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function fmtMoney(v, digits = 0) {
 const sign = v < 0 ? '-' : v > 0 ? '+' : '';
 const abs = Math.abs(v);
@@ -3588,6 +3805,82 @@ letter-spacing: 0.08em;
 @media (max-width: 640px) {
 .mb-mlbdir-banner { flex-direction: column; align-items: flex-start; gap: 6px; }
 .mb-mlbdir-msg { font-size: 12px; }
+}
+
+/* v9 Phase 1: Streak analysis view */
+.mb-streak-empty {
+  padding: var(--sp-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+}
+.mb-streak-empty-text { font-size: var(--fs-sm); }
+.mb-streak-kpis {
+  margin: var(--sp-md);
+  grid-template-columns: repeat(4, 1fr);
+}
+@media (max-width: 560px) {
+  .mb-streak-kpis { grid-template-columns: repeat(2, 1fr); }
+}
+.mb-streak-divergence {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: var(--sp-sm) var(--sp-md);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--s2);
+  font-size: var(--fs-sm);
+  flex-wrap: wrap;
+}
+.mb-streak-divergence-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: var(--fs-xs);
+}
+.mb-streak-divergence-val {
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.mb-streak-divergence-detail { font-size: var(--fs-xs); }
+.mb-streak-insight {
+  padding: var(--sp-sm) var(--sp-md);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid var(--gold);
+  line-height: 1.5;
+}
+.mb-streak-sim-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(199, 162, 107, 0.18);
+  color: var(--gold-bright, #d4b27a);
+  border: 1px solid rgba(199, 162, 107, 0.35);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  vertical-align: 1px;
+}
+.mb-streak-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-md);
+  padding: var(--sp-sm) var(--sp-md);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+}
+.mb-streak-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.mb-streak-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
 }
 
 /* v8.2: Disclaimer footer */
