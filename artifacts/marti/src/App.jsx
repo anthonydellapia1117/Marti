@@ -723,7 +723,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.0-streaks-preview',
+version: 'v9.0-bankroll-aware',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -989,7 +989,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.0-streaks-preview</span>
+<span className="mb-brand-ver mono">v9.0-bankroll-aware</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -2967,6 +2967,13 @@ return (
 // ============================================================
 
 function StreaksView({ outcomes, market, dataInfo, isStale }) {
+  // v9 Phase 2: Survival funding calculator inputs
+  const [bankrollBase, setBankrollBase] = useState(5);
+  const [bankrollM, setBankrollM] = useState(2.0);
+  const [safetyMarginPct, setSafetyMarginPct] = useState(50);
+  // v9 Phase 2 pivot: N_max slider for cap-aware analysis
+  const [bankrollNMax, setBankrollNMax] = useState(6);
+
   if (!outcomes || outcomes.length === 0) {
     return (
       <div className="mb-view">
@@ -2988,8 +2995,8 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
 
   const mkt = MARKETS.find(x => x.id === market);
   const mktLabel = mkt ? mkt.label : market;
-  const stats = computeStreaks(outcomes);
-  const { distribution, max, mean, median, total, winRate, n } = stats;
+  const stats = useMemo(() => computeStreaks(outcomes), [outcomes]);
+  const { distribution, max, mean, median, total, winRate, n, runs } = stats;
   const isSimulated = market === 'custom';
   const showLimitedSample = !isSimulated && n < 1000;
   const showSpxDisclosure = market === 'spx1h';
@@ -3001,6 +3008,106 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
     : Math.log(n) / Math.log(1 / q);
   const divergencePct = theoreticalMax > 0 ? ((max - theoreticalMax) / theoreticalMax) * 100 : 0;
   const divergenceAbove = divergencePct > 0;
+
+  // v9 Phase 2 pivot: dual-scenario bankroll analysis — capped (deployed strategy) + uncapped (reference)
+  const funding = useMemo(() => {
+    // Scenario A: capped strategy (the one we actually run)
+    const perSeqMaxLoss = bankrollM === 1
+      ? bankrollBase * bankrollNMax
+      : bankrollBase * (Math.pow(bankrollM, bankrollNMax) - 1) / (bankrollM - 1);
+    const finalBetAtCap = bankrollBase * Math.pow(bankrollM, bankrollNMax - 1);
+    const capCount = runs.filter(r => r >= bankrollNMax).length;
+    const capRate = n > 0 ? capCount / n : 0;
+    const seqsBeforeCap = capRate > 0 ? 1 / capRate : Infinity;
+
+    // Scenario B: uncapped reference (cost of zero cap events)
+    const targetSurvivalStreak = Math.ceil(max * (1 + safetyMarginPct / 100));
+    const uncappedBankroll = bankrollM === 1
+      ? bankrollBase * targetSurvivalStreak
+      : bankrollBase * (Math.pow(bankrollM, targetSurvivalStreak) - 1) / (bankrollM - 1);
+    const finalBetAtTarget = bankrollBase * Math.pow(bankrollM, targetSurvivalStreak - 1);
+    const uncappedInBaseBets = uncappedBankroll / bankrollBase;
+    const uncappedOverflow = !Number.isFinite(uncappedBankroll) || uncappedBankroll > Number.MAX_SAFE_INTEGER;
+    const cappedOverflow = !Number.isFinite(perSeqMaxLoss) || perSeqMaxLoss > Number.MAX_SAFE_INTEGER;
+
+    let uncappedTier;
+    if (uncappedOverflow || uncappedBankroll >= 10_000_000) uncappedTier = 'prohibitive';
+    else if (uncappedBankroll >= 1_000_000) uncappedTier = 'institutional';
+    else if (uncappedBankroll >= 100_000) uncappedTier = 'professional';
+    else if (uncappedBankroll >= 10_000) uncappedTier = 'serious';
+    else uncappedTier = 'hobbyist';
+
+    return {
+      perSeqMaxLoss, finalBetAtCap, capCount, capRate, seqsBeforeCap, cappedOverflow,
+      targetSurvivalStreak, uncappedBankroll, finalBetAtTarget, uncappedInBaseBets, uncappedOverflow, uncappedTier,
+    };
+  }, [stats, bankrollBase, bankrollM, safetyMarginPct, bankrollNMax]);
+
+  // Verdict 1: deployability of the capped strategy (capital + cap-frequency joint test)
+  const verdictCapped = (() => {
+    const { perSeqMaxLoss, capRate, cappedOverflow } = funding;
+    const lossSafe = !cappedOverflow && perSeqMaxLoss < 1_000;
+    const lossOk = !cappedOverflow && perSeqMaxLoss < 10_000;
+    if (lossSafe && capRate < 0.05) {
+      return {
+        tone: 'teal',
+        label: 'DEPLOYABLE',
+        msg: `Capped strategy is retail-deployable. ${fmtCapRate(capRate)} of sequences will cap, accepting max ${fmtBankroll(perSeqMaxLoss)} loss per cap event.`,
+      };
+    }
+    if (lossOk && capRate < 0.10) {
+      return {
+        tone: 'gold',
+        label: 'ACCEPTABLE',
+        msg: `Cap rate of ${fmtCapRate(capRate)} is acceptable for serious retail. Plan for ${fmtBankroll(perSeqMaxLoss)} drawdowns at the expected frequency.`,
+      };
+    }
+    if (capRate > 0.25) {
+      return {
+        tone: 'red',
+        label: 'CAP-HEAVY',
+        msg: `Cap rate of ${fmtCapRate(capRate)} means most sequences end in loss. Reconsider N_max, market, or direction.`,
+      };
+    }
+    return {
+      tone: 'gold-bright',
+      label: 'BORDERLINE',
+      msg: 'Capped strategy may be deployable but cap frequency or loss size requires capital cushion.',
+    };
+  })();
+
+  // Verdict 2: uncapped reference — only shown for context, intentionally smaller
+  const tierName = {
+    hobbyist: 'Hobbyist',
+    serious: 'Serious-retail',
+    professional: 'Professional',
+    institutional: 'Institutional',
+    prohibitive: 'Capital-prohibitive',
+  }[funding.uncappedTier];
+  const verdictUncapped = {
+    tone: funding.uncappedTier === 'hobbyist' || funding.uncappedTier === 'serious' ? 'teal'
+      : funding.uncappedTier === 'professional' ? 'gold'
+      : funding.uncappedTier === 'institutional' ? 'gold-bright'
+      : 'red',
+    label: 'UNCAPPED REFERENCE',
+    msg: `To eliminate cap events entirely, you would need ${fmtBankroll(funding.uncappedBankroll)} — this is the ${tierName}-tier requirement and is shown only as reference.`,
+  };
+
+  // Trade-off curve: how per-seq loss and cap rate move as N_max ranges from 2 to (max + 5)
+  const tradeoffData = useMemo(() => {
+    const data = [];
+    const xMax = Math.max(max + 5, bankrollNMax + 1);
+    for (let nmax = 2; nmax <= xMax; nmax++) {
+      const seqLoss = bankrollM === 1
+        ? bankrollBase * nmax
+        : bankrollBase * (Math.pow(bankrollM, nmax) - 1) / (bankrollM - 1);
+      const seqLossOverflow = !Number.isFinite(seqLoss) || seqLoss > Number.MAX_SAFE_INTEGER;
+      const cnt = runs.filter(r => r >= nmax).length;
+      const cr = n > 0 ? (cnt / n) * 100 : 0;
+      data.push({ nmax, seqLoss: seqLossOverflow ? null : seqLoss, capRate: cr });
+    }
+    return data;
+  }, [stats, bankrollBase, bankrollM, bankrollNMax, max]);
 
   let insight;
   if (Math.abs(divergencePct) > 30) {
@@ -3119,8 +3226,185 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
           <span className="mb-streak-legend-item"><span className="mb-streak-swatch" style={{ background: '#d4b787' }}></span>Theoretical (random walk)</span>
         </div>
       </section>
+
+      <section className="mb-section">
+        <div className="mb-section-head">
+          <div>
+            <h2 className="mb-section-title">Bankroll &amp; Cap Analysis</h2>
+            <p className="mb-section-sub">The deployed strategy caps at N_max losses and accepts the per-sequence drawdown. Uncapped survival is shown only as a reference point.</p>
+          </div>
+        </div>
+
+        <div className="mb-streak-funding-controls mb-streak-funding-controls-4">
+          <div className="mb-streak-funding-row">
+            <div className="mb-streak-funding-label">
+              <span>Base bet (B)</span>
+              <span className="mono mb-streak-funding-val">${bankrollBase}</span>
+            </div>
+            <input
+              type="range" min={1} max={100} step={1}
+              value={bankrollBase}
+              onChange={e => setBankrollBase(parseFloat(e.target.value))}
+              className="mb-slider"
+              aria-label="Base bet in dollars"
+            />
+          </div>
+          <div className="mb-streak-funding-row">
+            <div className="mb-streak-funding-label">
+              <span>Multiplier (m)</span>
+              <span className="mono mb-streak-funding-val">{bankrollM.toFixed(1)}×</span>
+            </div>
+            <input
+              type="range" min={1.5} max={3.0} step={0.1}
+              value={bankrollM}
+              onChange={e => setBankrollM(parseFloat(e.target.value))}
+              className="mb-slider"
+              aria-label="Martingale multiplier"
+            />
+          </div>
+          <div className="mb-streak-funding-row">
+            <div className="mb-streak-funding-label">
+              <span>N_max (cap-at-N)</span>
+              <span className="mono mb-streak-funding-val">{bankrollNMax}</span>
+            </div>
+            <input
+              type="range" min={2} max={30} step={1}
+              value={bankrollNMax}
+              onChange={e => setBankrollNMax(parseInt(e.target.value, 10))}
+              className="mb-slider"
+              aria-label="Max ladder steps before cap"
+            />
+          </div>
+          <div className="mb-streak-funding-row">
+            <div className="mb-streak-funding-label">
+              <span>Safety margin</span>
+              <span className="mono mb-streak-funding-val">{safetyMarginPct}%</span>
+            </div>
+            <input
+              type="range" min={0} max={100} step={5}
+              value={safetyMarginPct}
+              onChange={e => setSafetyMarginPct(parseFloat(e.target.value))}
+              className="mb-slider"
+              aria-label="Safety margin percent"
+            />
+          </div>
+        </div>
+
+        <div className="mb-streak-scenario-grid">
+          <div className="mb-streak-scenario-col">
+            <div className="mb-streak-scenario-title">Capped strategy (N_max = {bankrollNMax})</div>
+            <div className="mb-streak-scenario-kpis">
+              <div className="mb-kpi mb-kpi-primary">
+                <div className="mb-kpi-label">Per-sequence max loss</div>
+                <div className="mb-kpi-value mono gold">{fmtBankroll(funding.perSeqMaxLoss)}</div>
+              </div>
+              <div className="mb-kpi">
+                <div className="mb-kpi-label">Expected cap rate</div>
+                <div className="mb-kpi-value mono">{fmtCapRate(funding.capRate)}</div>
+              </div>
+              <div className="mb-kpi">
+                <div className="mb-kpi-label">Final bet at N_max</div>
+                <div className="mb-kpi-value mono">{fmtBankroll(funding.finalBetAtCap)}</div>
+              </div>
+              <div className="mb-kpi">
+                <div className="mb-kpi-label">Sequences before 1st cap</div>
+                <div className="mb-kpi-value mono">{Number.isFinite(funding.seqsBeforeCap) ? `~${Math.round(funding.seqsBeforeCap).toLocaleString()}` : '∞'}</div>
+              </div>
+            </div>
+          </div>
+          <div className="mb-streak-scenario-col mb-streak-scenario-col-dim">
+            <div className="mb-streak-scenario-title">Uncapped reference (not the deployed strategy)</div>
+            <div className="mb-streak-scenario-kpis">
+              <div className="mb-kpi">
+                <div className="mb-kpi-label">Uncapped bankroll</div>
+                <div className="mb-kpi-value mono">{fmtBankroll(funding.uncappedBankroll)}</div>
+              </div>
+              <div className="mb-kpi">
+                <div className="mb-kpi-label">Target survival streak</div>
+                <div className="mb-kpi-value mono">{funding.targetSurvivalStreak}</div>
+              </div>
+              <div className="mb-kpi">
+                <div className="mb-kpi-label">Final bet at target</div>
+                <div className="mb-kpi-value mono">{fmtBankroll(funding.finalBetAtTarget)}</div>
+              </div>
+              <div className="mb-kpi">
+                <div className="mb-kpi-label">Bankroll as base bets</div>
+                <div className="mb-kpi-value mono">{funding.uncappedOverflow ? '∞' : `${funding.uncappedInBaseBets.toLocaleString(undefined, { maximumFractionDigits: 0 })}×`}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className={`mb-streak-verdict mb-streak-verdict-${verdictCapped.tone}`}>
+          <span className="mb-streak-verdict-tag mono">{verdictCapped.label}</span>
+          <span className="mb-streak-verdict-msg">{verdictCapped.msg}</span>
+        </div>
+
+        <div className={`mb-streak-verdict mb-streak-verdict-sm mb-streak-verdict-${verdictUncapped.tone}`}>
+          <span className="mb-streak-verdict-tag mono">{verdictUncapped.label}</span>
+          <span className="mb-streak-verdict-msg">{verdictUncapped.msg}</span>
+        </div>
+
+        <div className="mb-section-head mb-section-head-tight">
+          <h3 className="mb-section-title-sm">Trade-off: N_max vs (bankroll required, cap frequency)</h3>
+          <span className="mb-section-meta mono">current N_max = {bankrollNMax}</span>
+        </div>
+        <div className="mb-chart-lg">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={tradeoffData} margin={{ top: 8, right: 12, left: -8, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="2 4" stroke="#2a2d33" vertical={false} />
+              <XAxis dataKey="nmax" stroke="#52524a" tick={{ fontSize: 10, fill: '#8a8578', fontFamily: 'JetBrains Mono, monospace' }} axisLine={{ stroke: '#2a2d33' }} tickLine={false} />
+              <YAxis
+                yAxisId="loss" scale="log" domain={['auto', 'auto']} allowDataOverflow
+                stroke="#c7a26b" tick={{ fontSize: 10, fill: '#c7a26b', fontFamily: 'JetBrains Mono, monospace' }}
+                axisLine={{ stroke: '#2a2d33' }} tickLine={false} width={64}
+                tickFormatter={(v) => fmtBankroll(v)}
+              />
+              <YAxis
+                yAxisId="cap" orientation="right"
+                stroke="#5a9978" tick={{ fontSize: 10, fill: '#5a9978', fontFamily: 'JetBrains Mono, monospace' }}
+                axisLine={{ stroke: '#2a2d33' }} tickLine={false} width={48}
+                tickFormatter={(v) => `${v.toFixed(0)}%`}
+              />
+              <Tooltip
+                contentStyle={{ background: '#14161a', border: '1px solid #2a2d33', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}
+                labelFormatter={(l) => `N_max = ${l}`}
+                formatter={(v, k) => k === 'seqLoss' ? [v == null ? '∞' : fmtBankroll(v), 'Per-seq max loss'] : [`${v.toFixed(2)}%`, 'Cap rate']}
+              />
+              <ReferenceLine x={bankrollNMax} yAxisId="loss" stroke="#d4b787" strokeDasharray="3 3" />
+              <Line yAxisId="loss" type="monotone" dataKey="seqLoss" stroke="#c7a26b" strokeWidth={1.8} dot={false} connectNulls={false} />
+              <Line yAxisId="cap" type="monotone" dataKey="capRate" stroke="#5a9978" strokeWidth={1.8} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="mb-streak-legend">
+          <span className="mb-streak-legend-item"><span className="mb-streak-swatch" style={{ background: '#c7a26b' }}></span>Per-sequence max loss (log scale, left)</span>
+          <span className="mb-streak-legend-item"><span className="mb-streak-swatch" style={{ background: '#5a9978' }}></span>Cap rate % (right)</span>
+          <span className="mb-streak-legend-item"><span className="mb-streak-swatch" style={{ background: '#d4b787' }}></span>Current N_max</span>
+        </div>
+      </section>
     </div>
   );
+}
+
+// v9 Phase 2: format big bankroll values; flips to ∞ when not finite or beyond MAX_SAFE_INTEGER
+function fmtBankroll(v) {
+  if (!Number.isFinite(v) || v > Number.MAX_SAFE_INTEGER) return '∞';
+  if (v >= 1e12) return `$${(v / 1e12).toFixed(1)}T`;
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+  if (v >= 1e3) return `$${(v / 1e3).toFixed(1)}k`;
+  return `$${v.toFixed(0)}`;
+}
+
+// v9 Phase 2 pivot: cap-rate formatter with "<0.01%" floor and natural scaling
+function fmtCapRate(r) {
+  if (!Number.isFinite(r) || r <= 0) return '<0.01%';
+  const pct = r * 100;
+  if (pct < 0.01) return '<0.01%';
+  if (pct < 1) return `${pct.toFixed(2)}%`;
+  if (pct < 10) return `${pct.toFixed(1)}%`;
+  return `${pct.toFixed(0)}%`;
 }
 
 function fmtMoney(v, digits = 0) {
@@ -3889,6 +4173,142 @@ letter-spacing: 0.08em;
   height: 10px;
   border-radius: 2px;
 }
+
+/* v9 Phase 2: Survival funding calculator */
+.mb-streak-funding-controls {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-md);
+  padding: var(--sp-md);
+  border-bottom: 1px solid var(--border);
+}
+.mb-streak-funding-controls-4 { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 900px) {
+  .mb-streak-funding-controls-4 { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 720px) {
+  .mb-streak-funding-controls { grid-template-columns: 1fr; }
+  .mb-streak-funding-controls-4 { grid-template-columns: 1fr; }
+}
+.mb-streak-funding-row { display: flex; flex-direction: column; gap: 6px; }
+.mb-streak-funding-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.mb-streak-funding-val { color: var(--text); text-transform: none; letter-spacing: 0; font-size: var(--fs-sm); }
+.mb-streak-funding-kpis {
+  margin: var(--sp-md);
+  grid-template-columns: repeat(2, 1fr);
+}
+@media (max-width: 560px) {
+  .mb-streak-funding-kpis { grid-template-columns: 1fr; }
+}
+.mb-streak-verdict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px var(--sp-md);
+  margin: 0 var(--sp-md) var(--sp-md);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.mb-streak-verdict-tag {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.mb-streak-verdict-msg { flex: 1; }
+.mb-streak-verdict-teal {
+  background: rgba(61, 110, 82, 0.10);
+  border-color: rgba(61, 110, 82, 0.45);
+}
+.mb-streak-verdict-teal .mb-streak-verdict-tag {
+  background: rgba(61, 110, 82, 0.20);
+  color: var(--teal-bright);
+}
+.mb-streak-verdict-gold {
+  background: rgba(199, 162, 107, 0.06);
+  border-color: rgba(199, 162, 107, 0.45);
+}
+.mb-streak-verdict-gold .mb-streak-verdict-tag {
+  background: rgba(199, 162, 107, 0.18);
+  color: var(--gold);
+}
+.mb-streak-verdict-gold-bright {
+  background: rgba(212, 183, 135, 0.12);
+  border-color: rgba(212, 183, 135, 0.55);
+}
+.mb-streak-verdict-gold-bright .mb-streak-verdict-tag {
+  background: rgba(212, 183, 135, 0.25);
+  color: var(--gold-bright);
+}
+.mb-streak-verdict-red {
+  background: rgba(196, 69, 69, 0.08);
+  border-color: rgba(196, 69, 69, 0.45);
+}
+.mb-streak-verdict-red .mb-streak-verdict-tag {
+  background: rgba(196, 69, 69, 0.18);
+  color: var(--red-bright);
+}
+@media (max-width: 560px) {
+  .mb-streak-verdict { flex-direction: column; align-items: flex-start; gap: 6px; }
+}
+
+/* v9 Phase 2 pivot: dual-scenario grid + dim column + small reference verdict */
+.mb-streak-scenario-grid {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: var(--sp-md);
+  padding: var(--sp-md);
+  border-bottom: 1px solid var(--border);
+}
+@media (max-width: 880px) {
+  .mb-streak-scenario-grid { grid-template-columns: 1fr; }
+}
+.mb-streak-scenario-col { display: flex; flex-direction: column; gap: var(--sp-sm); min-width: 0; }
+.mb-streak-scenario-title {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 500;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.mb-streak-scenario-kpis {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+@media (max-width: 480px) {
+  .mb-streak-scenario-kpis { grid-template-columns: 1fr; }
+}
+.mb-streak-scenario-col-dim .mb-streak-scenario-title { color: var(--dim); }
+.mb-streak-scenario-col-dim .mb-kpi { background: var(--bg); }
+.mb-streak-scenario-col-dim .mb-kpi-label { color: var(--dim); }
+.mb-streak-scenario-col-dim .mb-kpi-value { color: var(--muted); font-size: var(--fs-md); }
+
+.mb-streak-verdict-sm {
+  padding: 6px var(--sp-md);
+  font-size: 11.5px;
+  opacity: 0.85;
+}
+.mb-streak-verdict-sm .mb-streak-verdict-tag { font-size: 9px; padding: 1px 6px; }
 
 /* v8.2: Disclaimer footer */
 .mb-disclaimer {
