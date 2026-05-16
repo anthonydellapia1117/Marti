@@ -766,7 +766,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.1.1-help-everywhere',
+version: 'v9.1.2-result',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1087,7 +1087,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.1.1-help-everywhere</span>
+<span className="mb-brand-ver mono">v9.1.2-result</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -3438,15 +3438,17 @@ function formatCurrency(n) {
 }
 
 function GuidedView({ guidedStep, setGuidedStep, guidedInputs, setGuidedInputs, setViewMode, onRunSimulation }) {
+  const stepLabel = guidedStep === 5 ? 'YOUR RESULT' : `STEP ${guidedStep} OF 4`;
   return (
     <div className="mb-guided">
       <div className="mb-guided-stepbar">
         <div className="mb-guided-stepbar-track">
-          {[1, 2, 3, 4].map(s => (
-            <div key={s} className={`mb-guided-stepbar-cell ${s <= guidedStep ? 'mb-guided-stepbar-cell-active' : ''}`} />
-          ))}
+          {[1, 2, 3, 4].map(s => {
+            const reached = guidedStep === 5 ? s <= 4 : s <= guidedStep;
+            return <div key={s} className={`mb-guided-stepbar-cell ${reached ? 'mb-guided-stepbar-cell-active' : ''}`} />;
+          })}
         </div>
-        <div className="mb-guided-stepbar-label mono">STEP {guidedStep} OF 4</div>
+        <div className="mb-guided-stepbar-label mono">{stepLabel}</div>
       </div>
       {guidedStep === 1 && <GuidedScreen1 onNext={() => setGuidedStep(2)} />}
       {guidedStep === 2 && (
@@ -3467,9 +3469,16 @@ function GuidedView({ guidedStep, setGuidedStep, guidedInputs, setGuidedInputs, 
       {guidedStep === 4 && (
         <GuidedScreen4
           inputs={guidedInputs}
-          onRunSimulation={onRunSimulation}
+          onShowResult={() => setGuidedStep(5)}
           onGoExpert={() => setViewMode('expert')}
           onRestart={() => { setGuidedStep(2); }}
+        />
+      )}
+      {guidedStep === 5 && (
+        <GuidedScreen5
+          inputs={guidedInputs}
+          onBack={() => setGuidedStep(2)}
+          onSeeFullMath={onRunSimulation}
         />
       )}
     </div>
@@ -3534,7 +3543,7 @@ function GuidedScreen2({ inputs, setInputs, onBack, onNext }) {
       <div className="mb-guided-field">
         <label className="mb-guided-field-label">
           How much money would you put aside for this?
-          <HelpIcon title="What if I don't know?" explanation="Use the amount you'd be willing to risk losing entirely. If unsure, start with $5,000–$10,000." example="$50,000 is a typical middle-ground for serious testing." />
+          <HelpIcon title="Your total bankroll" explanation="What you'd risk on this strategy over time. Bigger means more buffer for bad days, but ties up more capital." example="$10k is a typical start. $50k is serious." />
         </label>
         <p className="mb-guided-field-sub">Your total bankroll — what you'd risk on this strategy over time, not what you'd bet each day.</p>
         <input
@@ -3549,7 +3558,7 @@ function GuidedScreen2({ inputs, setInputs, onBack, onNext }) {
       <div className="mb-guided-field">
         <label className="mb-guided-field-label">
           How much are you OK losing per day at the worst?
-          <HelpIcon title="What's a good daily budget?" explanation="Common rule: 1–3% of total bankroll per day. With $50k bankroll, that's $500–$1,500." example="$1,500/day is the default — allows meaningful action without rapid bankroll depletion." />
+          <HelpIcon title="Daily allocation" explanation="The most you'd be willing to lose in one bad day. Marti uses this to size your bets." example="$1,500/day = mid-tier serious. $500/day = cautious." />
         </label>
         <p className="mb-guided-field-sub">Your daily allocation. Bigger means bigger potential wins but bigger swings.</p>
         <input
@@ -3566,20 +3575,25 @@ function GuidedScreen2({ inputs, setInputs, onBack, onNext }) {
         <p className="mb-guided-field-sub">Pick the trade-off between bigger wins and lower risk.</p>
         <div className="mb-guided-comfort-grid">
           {[
-            { id: 'most_careful', label: 'Most careful', sub: 'Small wins, tiny risk of big losses' },
-            { id: 'balanced', label: 'Balanced', sub: 'Medium wins, low risk — good default' },
-            { id: 'aggressive', label: 'Aggressive', sub: 'Bigger wins, more risk of bad days' },
+            { id: 'most_careful', label: 'Most careful', sub: 'Small wins, tiny risk of big losses', help: { title: 'Most careful', explanation: 'Smaller bets, lower win amounts, but very rare big losses.', example: 'Maybe $24/day average gain but almost never a bad day.' } },
+            { id: 'balanced', label: 'Balanced', sub: 'Medium wins, low risk — good default', help: { title: 'Balanced', explanation: 'Mid-sized bets with manageable downside.', example: 'Maybe $240/day average gain with occasional bad days.' } },
+            { id: 'aggressive', label: 'Aggressive', sub: 'Bigger wins, more risk of bad days', help: { title: 'Aggressive', explanation: 'Bigger bets, bigger wins, but more bad days.', example: 'Maybe $535/day average gain, harder days more frequent.' } },
           ].map(opt => (
-            <button
+            <div
               key={opt.id}
-              type="button"
+              role="button"
+              tabIndex={0}
               onClick={() => setInputs(prev => ({ ...prev, comfort: opt.id }))}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setInputs(prev => ({ ...prev, comfort: opt.id })); } }}
               className={`mb-guided-comfort-card ${comfort === opt.id ? 'mb-guided-comfort-card-active' : ''}`}
               aria-pressed={comfort === opt.id}
             >
-              <span className="mb-guided-comfort-label">{opt.label}</span>
+              <span className="mb-guided-comfort-label">
+                {opt.label}
+                <HelpIcon title={opt.help.title} explanation={opt.help.explanation} example={opt.help.example} />
+              </span>
               <span className="mb-guided-comfort-sub">{opt.sub}</span>
-            </button>
+            </div>
           ))}
         </div>
       </div>
@@ -3709,19 +3723,19 @@ function GuidedScreen3({ inputs, onBack, onNext }) {
 
             <div className="mb-guided-stats">
               <div className="mb-guided-stat">
-                <div className="mb-guided-stat-label">Expected daily return</div>
-                <div className={`mb-guided-stat-value mono ${daily >= 0 ? 'pos' : 'neg'}`}>{daily >= 0 ? '+' : ''}{fmtMoney(daily)}</div>
+                <div className="mb-guided-stat-label">Expected daily return <HelpIcon title="What you'd average per day" explanation="How much profit (or loss) per day on average, across many days of this strategy." example="+$240/day means after 30 days you'd be up ~$7,200 on average." /></div>
+                <div className={`mb-guided-stat-value mono ${daily >= 0 ? 'pos' : 'neg'}`}>{fmtMoney(daily)}</div>
               </div>
               <div className="mb-guided-stat">
-                <div className="mb-guided-stat-label">Worst possible day</div>
+                <div className="mb-guided-stat-label">Worst possible day <HelpIcon title="The biggest single-day loss" explanation="Your daily allocation — if everything goes wrong in one day, this is your max pain." example="-$1,500 means you set $1,500 as your daily allocation, so that's your worst case." /></div>
                 <div className="mb-guided-stat-value mono neg">-{formatCurrency(dailyBudget)}</div>
               </div>
               <div className="mb-guided-stat">
-                <div className="mb-guided-stat-label">Bankroll lasts (worst case)</div>
+                <div className="mb-guided-stat-label">Bankroll lasts (worst case) <HelpIcon title="How long your money holds out" explanation="If you hit your worst possible day consecutively, this is how many days before your bankroll is depleted." example="~24 days means even with terrible luck repeated daily, you'd have over 3 weeks before running dry." /></div>
                 <div className="mb-guided-stat-value mono gold">~{Number.isFinite(p.daysToDeplete) ? Math.round(p.daysToDeplete).toLocaleString() : '∞'} days</div>
               </div>
               <div className="mb-guided-stat">
-                <div className="mb-guided-stat-label">Chance you go broke (30d)</div>
+                <div className="mb-guided-stat-label">Chance you go broke (30d) <HelpIcon title="Probability of ruin" explanation="The chance you lose your entire bankroll within 30 days, based on real market data." example="<0.01% means basically zero. Above 5% means real risk." /></div>
                 <div className="mb-guided-stat-value mono pos">{fmtCapRate(p.pRuin)}</div>
               </div>
             </div>
@@ -3751,7 +3765,7 @@ function GuidedScreen3({ inputs, onBack, onNext }) {
   );
 }
 
-function GuidedScreen4({ inputs, onRunSimulation, onGoExpert, onRestart }) {
+function GuidedScreen4({ inputs, onShowResult, onGoExpert, onRestart }) {
   // Re-derive the primary so the "Run a 1-week sim" CTA can wire the right config
   const { bankroll, dailyBudget, comfort } = inputs;
   const preference = COMFORT_TO_PREF[comfort] || 'max_profit';
@@ -3816,11 +3830,11 @@ function GuidedScreen4({ inputs, onRunSimulation, onGoExpert, onRestart }) {
         <button
           type="button"
           className="mb-guided-next-card"
-          onClick={() => primary && onRunSimulation({ market: primary.market, B: primary.B, N_max: primary.N_max, num: 10000 })}
+          onClick={() => primary && onShowResult()}
           disabled={!primary}
         >
           <span className="mb-guided-next-card-title">Run a 1-week simulation</span>
-          <span className="mb-guided-next-card-sub">See what this would have done over recent real market data.</span>
+          <span className="mb-guided-next-card-sub">See what this would have done over the past 7 days of real market data.</span>
         </button>
         <button
           type="button"
@@ -3838,6 +3852,184 @@ function GuidedScreen4({ inputs, onRunSimulation, onGoExpert, onRestart }) {
           <span className="mb-guided-next-card-title">Start over with different numbers</span>
           <span className="mb-guided-next-card-sub">Adjust your bankroll, budget, or comfort level.</span>
         </button>
+      </div>
+    </div>
+  );
+}
+
+// v9.1.2: Walks the last ~7 days of outcomes through the bot's ladder and reports per-day P&L.
+function simulateLastWeek(outcomes, B, m, N_max) {
+  const dailyPL = new Map();
+  const bumpDay = (t, delta) => {
+    const day = new Date(t).toISOString().slice(0, 10);
+    dailyPL.set(day, (dailyPL.get(day) || 0) + delta);
+  };
+  let winRounds = 0, capRounds = 0;
+  let i = 0;
+  while (i < outcomes.length) {
+    let bet = B, k = 0, won = false;
+    while (k < N_max && i < outcomes.length) {
+      const o = outcomes[i];
+      if (o.win === 1) { bumpDay(o.t, bet); won = true; i++; winRounds++; break; }
+      bumpDay(o.t, -bet);
+      i++; k++; bet *= m;
+    }
+    if (!won) capRounds++;
+  }
+  const dayEntries = Array.from(dailyPL.entries()).sort();
+  const totalPL = dayEntries.reduce((s, [, v]) => s + v, 0);
+  const bestDay = dayEntries.length ? Math.max(...dayEntries.map(d => d[1])) : 0;
+  const worstDay = dayEntries.length ? Math.min(...dayEntries.map(d => d[1])) : 0;
+  return { totalPL, winRounds, capRounds, totalRounds: winRounds + capRounds, dailyPL: dayEntries, daysPlayed: dayEntries.length, bestDay, worstDay };
+}
+
+function GuidedScreen5({ inputs, onBack, onSeeFullMath }) {
+  const { bankroll, dailyBudget, comfort } = inputs;
+  const preference = COMFORT_TO_PREF[comfort] || 'max_profit';
+  const [outcomesByMarket, setOutcomesByMarket] = useState({});
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(REC_RECOMMEND_MARKETS.map(m => fetchRealOutcomes(m).then(p => [m, p]).catch(() => [m, null])))
+      .then(entries => {
+        if (cancelled) return;
+        const next = {};
+        for (const [m, payload] of entries) if (payload) next[m] = payload;
+        setOutcomesByMarket(next);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Re-derive the same primary as Screen 4 (same scoring, same filters).
+  const primary = useMemo(() => {
+    if (loading || Object.keys(outcomesByMarket).length === 0) return null;
+    const tolerance = 0.05;
+    const configs = [];
+    for (const m of REC_RECOMMEND_MARKETS) {
+      const payload = outcomesByMarket[m]; if (!payload?.outcomes) continue;
+      const outcomes = payload.outcomes;
+      const stats = computeStreaks(outcomes);
+      const { n, winRate } = stats;
+      const totalDays = payload.start && payload.end
+        ? Math.max(1, (new Date(payload.end) - new Date(payload.start)) / 86400000)
+        : 1;
+      const outcomesPerDay = n / totalDays;
+      for (const N_max of REC_N_VALUES) {
+        const capCount = countLossRunsAtLeast(outcomes, N_max);
+        const capRate = n > 0 ? capCount / n : 0;
+        if (capRate > tolerance) continue;
+        const ladder = (Math.pow(REC_MULTIPLIER, N_max) - 1) / (REC_MULTIPLIER - 1);
+        const maxB = (dailyBudget / 3) / ladder;
+        if (maxB < 1) continue;
+        const B = snapBet(maxB);
+        const perSeqMaxLoss = B * ladder;
+        const avgSeqLen = winRate > 0 ? Math.min(1 / winRate, N_max) : N_max;
+        const seqsPerDay = outcomesPerDay / avgSeqLen;
+        const rm = computeRiskMetrics(bankroll, perSeqMaxLoss, capRate, seqsPerDay, 30);
+        if (rm.pRuin > 0.05) continue;
+        let score;
+        if (preference === 'maximize_seqs') score = seqsPerDay;
+        else if (preference === 'minimize_caps') score = (1 - capRate) * 1000;
+        else score = seqsPerDay * (winRate * B - capRate * perSeqMaxLoss);
+        configs.push({ market: m, N_max, B, score });
+      }
+    }
+    if (configs.length === 0) return null;
+    configs.sort((a, b) => b.score - a.score);
+    return configs[0];
+  }, [outcomesByMarket, loading, bankroll, dailyBudget, preference]);
+
+  // Filter that market's outcomes to the last 7 days (using outcome timestamps).
+  const sim = useMemo(() => {
+    if (!primary) return null;
+    const payload = outcomesByMarket[primary.market];
+    if (!payload?.outcomes || payload.outcomes.length === 0) return null;
+    const outcomes = payload.outcomes;
+    const last = outcomes[outcomes.length - 1].t;
+    const cutoff = last - 7 * 86400000;
+    const last7 = outcomes.filter(o => o.t >= cutoff);
+    if (last7.length === 0) return null;
+    const result = simulateLastWeek(last7, primary.B, REC_MULTIPLIER, primary.N_max);
+    return result;
+  }, [primary, outcomesByMarket]);
+
+  if (loading) {
+    return (
+      <div className="mb-guided-card mb-guided-anim">
+        <h2 className="mb-guided-title">Loading your week…</h2>
+        <p className="mb-guided-sub mono">Crunching the last 7 days of real market data.</p>
+      </div>
+    );
+  }
+
+  if (!primary || !sim) {
+    return (
+      <div className="mb-guided-card mb-guided-anim">
+        <h2 className="mb-guided-title">No result available</h2>
+        <p className="mb-guided-sub">Go back to step 2 and complete your situation first.</p>
+        <div className="mb-guided-actions">
+          <button type="button" className="mb-guided-btn-secondary" onClick={onBack}>← Back</button>
+          <span />
+        </div>
+      </div>
+    );
+  }
+
+  const mkt = MARKETS.find(x => x.id === primary.market);
+  const mktLabel = mkt ? mkt.label : primary.market;
+  const dirLabel = mkt?.directionLabel ? ` (${mkt.directionLabel})` : '';
+  const winRate = sim.totalRounds > 0 ? (sim.winRounds / sim.totalRounds) * 100 : 0;
+  const verdictTone = sim.totalPL > 0 ? 'green' : sim.totalPL < 0 ? 'red' : 'yellow';
+  const VerdictIcon = sim.totalPL > 0 ? CheckCircle : sim.totalPL < 0 ? XCircle : AlertTriangle;
+  const verdictLabel = sim.totalPL > 0
+    ? `WOULD HAVE MADE +${fmtBankroll(sim.totalPL)}`
+    : sim.totalPL < 0
+    ? `WOULD HAVE LOST −${fmtBankroll(Math.abs(sim.totalPL))}`
+    : 'BREAK EVEN';
+
+  return (
+    <div className="mb-guided-card mb-guided-anim">
+      <h2 className="mb-guided-title">Last week with your strategy</h2>
+      <p className="mb-guided-sub">
+        If you had played <strong>{mktLabel}{dirLabel}</strong> with <span className="mono gold">${primary.B}</span> bets capped at <span className="mono gold">{primary.N_max}</span> doubles over the past <span className="mono">{sim.daysPlayed}</span> days…
+      </p>
+
+      <div className={`mb-guided-verdict mb-guided-verdict-${verdictTone}`}>
+        <VerdictIcon size={28} strokeWidth={2} />
+        <span className="mb-guided-verdict-label mono">{verdictLabel}</span>
+      </div>
+
+      <div className="mb-guided-stats">
+        <div className="mb-guided-stat">
+          <div className="mb-guided-stat-label">Days played</div>
+          <div className="mb-guided-stat-value mono">{sim.daysPlayed}</div>
+        </div>
+        <div className="mb-guided-stat">
+          <div className="mb-guided-stat-label">Rounds run</div>
+          <div className="mb-guided-stat-value mono">{sim.totalRounds.toLocaleString()}</div>
+        </div>
+        <div className="mb-guided-stat">
+          <div className="mb-guided-stat-label">Win rate</div>
+          <div className="mb-guided-stat-value mono pos">{winRate.toFixed(1)}%</div>
+        </div>
+        <div className="mb-guided-stat">
+          <div className="mb-guided-stat-label">Best day</div>
+          <div className={`mb-guided-stat-value mono ${sim.bestDay >= 0 ? 'pos' : 'neg'}`}>{fmtMoney(sim.bestDay)}</div>
+        </div>
+        <div className="mb-guided-stat">
+          <div className="mb-guided-stat-label">Worst day</div>
+          <div className={`mb-guided-stat-value mono ${sim.worstDay >= 0 ? 'pos' : 'neg'}`}>{fmtMoney(sim.worstDay)}</div>
+        </div>
+      </div>
+
+      <div className="mb-guided-actions">
+        <button type="button" className="mb-guided-btn-secondary" onClick={onBack}>← Adjust strategy</button>
+        <button
+          type="button"
+          className="mb-guided-btn-primary"
+          onClick={() => onSeeFullMath({ market: primary.market, B: primary.B, N_max: primary.N_max, num: 10000 })}
+        >See full math →</button>
       </div>
     </div>
   );
