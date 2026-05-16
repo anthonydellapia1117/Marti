@@ -726,7 +726,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.0-plain-english',
+version: 'v9.0-prescribe',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -893,6 +893,13 @@ return (
         isStale={isStale}
       />
     )}
+    {view === 'recommend' && (
+      <RecommendView
+        market={market}
+        setMarket={setMarket}
+        currentOutcomes={rawOutcomes}
+      />
+    )}
     {view === 'askmarty' && (
       <AskMartyView
         results={results}
@@ -1006,7 +1013,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.0-plain-english</span>
+<span className="mb-brand-ver mono">v9.0-prescribe</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -1041,6 +1048,7 @@ const tabs = [
 { id: 'workspace', label: 'Workspace' },
 { id: 'insights', label: 'Insights' },
 { id: 'streaks', label: 'Streaks' },
+{ id: 'recommend', label: 'Recommend', special: true },
 { id: 'askmarty', label: 'Ask Marti', special: true }
 ];
 return (
@@ -1065,6 +1073,7 @@ const tabs = [
 { id: 'workspace', label: 'Workspace', icon: Layers },
 { id: 'insights', label: 'Insights', icon: Activity },
 { id: 'streaks', label: 'Streaks', icon: Flame },
+{ id: 'recommend', label: 'Recommend', icon: Target },
 { id: 'askmarty', label: 'Marti', icon: Sparkles }
 ];
 return (
@@ -3131,6 +3140,344 @@ function PlainEnglishCard({ results, outcomes, market, dataInfo, period, isStale
 }
 
 // ============================================================
+// RECOMMEND VIEW (v9 Phase 3b) — prescription layer
+// Takes user constraints (bankroll, daily budget, risk tolerance, preference) and
+// proposes a concrete (market, N_max, B) play by scoring every viable config across
+// all enabled markets against live streak data.
+// ============================================================
+
+const REC_RECOMMEND_MARKETS = ['btc15', 'spx1h', 'mlb'];
+const REC_N_VALUES = [4, 5, 6, 7, 8, 10, 12, 15];
+const REC_MULTIPLIER = 2; // m=2 fixed for now; slider deferred to Phase 4
+const REC_BET_SNAPS = [1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000];
+
+function snapBet(maxB) {
+  let best = 1;
+  for (const s of REC_BET_SNAPS) if (s <= maxB) best = s;
+  return best;
+}
+
+function RecommendView({ market, setMarket, currentOutcomes }) {
+  const [bankroll, setBankroll] = useState(50_000);
+  const [dailyBudget, setDailyBudget] = useState(1_500);
+  const [riskTolerance, setRiskTolerance] = useState(5);
+  const [enabledMarkets, setEnabledMarkets] = useState({ btc15: true, spx1h: true, mlb: true });
+  const [preference, setPreference] = useState('balanced');
+  const [outcomesByMarket, setOutcomesByMarket] = useState(() => {
+    return currentOutcomes && market && REC_RECOMMEND_MARKETS.includes(market)
+      ? { [market]: { outcomes: currentOutcomes, start: null, end: null } }
+      : {};
+  });
+  const [loadingMarkets, setLoadingMarkets] = useState(new Set());
+  const [errorMarkets, setErrorMarkets] = useState({});
+  const [lockedAt, setLockedAt] = useState(null);
+
+  const enabledList = useMemo(
+    () => REC_RECOMMEND_MARKETS.filter(m => enabledMarkets[m]),
+    [enabledMarkets]
+  );
+
+  // Lazy-fetch outcomes for any enabled market we haven't loaded yet
+  useEffect(() => {
+    const toFetch = enabledList.filter(m => !outcomesByMarket[m] && !loadingMarkets.has(m) && !errorMarkets[m]);
+    if (toFetch.length === 0) return;
+    setLoadingMarkets(prev => {
+      const next = new Set(prev);
+      for (const m of toFetch) next.add(m);
+      return next;
+    });
+    for (const m of toFetch) {
+      fetchRealOutcomes(m)
+        .then(payload => {
+          setOutcomesByMarket(prev => ({ ...prev, [m]: payload }));
+          setLoadingMarkets(prev => { const n = new Set(prev); n.delete(m); return n; });
+        })
+        .catch(err => {
+          setErrorMarkets(prev => ({ ...prev, [m]: err && err.message ? err.message : String(err) }));
+          setLoadingMarkets(prev => { const n = new Set(prev); n.delete(m); return n; });
+        });
+    }
+  }, [enabledList, outcomesByMarket, loadingMarkets, errorMarkets]);
+
+  // Auto-clear the "locked in" toast after 3s
+  useEffect(() => {
+    if (!lockedAt) return;
+    const t = setTimeout(() => setLockedAt(null), 3000);
+    return () => clearTimeout(t);
+  }, [lockedAt]);
+
+  const recommendation = useMemo(() => {
+    if (enabledList.length === 0) return { kind: 'empty' };
+    if (dailyBudget > bankroll) return { kind: 'budget_exceeds_bankroll' };
+    if (dailyBudget < 50) return { kind: 'budget_too_small' };
+
+    const stillLoading = enabledList.filter(m => !outcomesByMarket[m] && !errorMarkets[m]);
+    if (stillLoading.length > 0) return { kind: 'loading', stillLoading };
+
+    const tolerance = riskTolerance / 100;
+    const configs = [];
+    for (const m of enabledList) {
+      const payload = outcomesByMarket[m];
+      if (!payload || !payload.outcomes) continue;
+      const outcomes = payload.outcomes;
+      const stats = computeStreaks(outcomes);
+      const { runs, n, winRate } = stats;
+      const totalDays = payload.start && payload.end
+        ? Math.max(1, (new Date(payload.end) - new Date(payload.start)) / 86400000)
+        : 1;
+      const outcomesPerDay = n / totalDays;
+      for (const N_max of REC_N_VALUES) {
+        const capCount = runs.filter(r => r >= N_max).length;
+        const capRate = n > 0 ? capCount / n : 0;
+        if (capRate > tolerance) continue;
+        const ladderMultiple = (Math.pow(REC_MULTIPLIER, N_max) - 1) / (REC_MULTIPLIER - 1);
+        const maxB = (dailyBudget / 3) / ladderMultiple;
+        if (maxB < 1) continue;
+        const B = snapBet(maxB);
+        const perSeqMaxLoss = B * ladderMultiple;
+        const finalBetSize = B * Math.pow(REC_MULTIPLIER, N_max - 1);
+        const avgSeqLen = winRate > 0 ? Math.min(1 / winRate, N_max) : N_max;
+        const seqsPerDay = outcomesPerDay / avgSeqLen;
+        const capsPerDay = capCount / totalDays;
+        const requiredBankroll = perSeqMaxLoss * 5; // 5x per-seq loss as suggested floor
+        const daysToDeplete = capsPerDay > 0 && perSeqMaxLoss > 0
+          ? dailyBudget / (capsPerDay * perSeqMaxLoss)
+          : Infinity;
+        let score;
+        if (preference === 'maximize_seqs') score = seqsPerDay;
+        else if (preference === 'minimize_caps') score = (1 - capRate) * 1000;
+        else score = seqsPerDay * (1 - capRate);
+        configs.push({
+          market: m, N_max, B, capRate, perSeqMaxLoss, finalBetSize,
+          seqsPerDay, capsPerDay, requiredBankroll, daysToDeplete, score, winRate,
+        });
+      }
+    }
+    if (configs.length === 0) return { kind: 'none_viable' };
+    configs.sort((a, b) => b.score - a.score);
+    return { kind: 'ok', primary: configs[0], alternatives: configs.slice(1, 4), all: configs };
+  }, [enabledList, outcomesByMarket, errorMarkets, riskTolerance, dailyBudget, bankroll, preference]);
+
+  const onLockIn = () => {
+    if (recommendation.kind !== 'ok') return;
+    setMarket(recommendation.primary.market);
+    setLockedAt(Date.now());
+  };
+
+  const budgetWarn = dailyBudget > bankroll;
+
+  return (
+    <div className="mb-view">
+      <div className="mb-rec-layout">
+        <section className="mb-section mb-rec-inputs">
+          <div className="mb-section-head">
+            <div>
+              <h2 className="mb-section-title">Your situation</h2>
+              <p className="mb-section-sub">Tell Marti your constraints and it will propose a play.</p>
+            </div>
+          </div>
+          <div className="mb-rec-input-grid">
+            <label className="mb-rec-field">
+              <span className="mb-rec-field-label">Total bankroll</span>
+              <input
+                type="number" min={100} max={10_000_000} step={100}
+                value={bankroll}
+                onChange={e => setBankroll(Math.max(100, Math.min(10_000_000, parseFloat(e.target.value) || 0)))}
+                className="mb-numinput mono"
+              />
+            </label>
+            <label className={`mb-rec-field ${budgetWarn ? 'mb-rec-field-warn' : ''}`}>
+              <span className="mb-rec-field-label">Daily allocation budget</span>
+              <input
+                type="number" min={10} max={100_000} step={10}
+                value={dailyBudget}
+                onChange={e => setDailyBudget(Math.max(10, Math.min(100_000, parseFloat(e.target.value) || 0)))}
+                className="mb-numinput mono"
+              />
+              {budgetWarn && <span className="mb-rec-field-warn-msg">Daily budget exceeds total bankroll</span>}
+            </label>
+            <label className="mb-rec-field">
+              <span className="mb-rec-field-label">
+                Risk tolerance (cap rate ceiling) <span className="mono">{riskTolerance}%</span>
+              </span>
+              <input
+                type="range" min={1} max={25} step={1}
+                value={riskTolerance}
+                onChange={e => setRiskTolerance(parseInt(e.target.value, 10))}
+                className="mb-slider"
+              />
+            </label>
+            <div className="mb-rec-field">
+              <span className="mb-rec-field-label">Markets willing to play</span>
+              <div className="mb-rec-checks">
+                {REC_RECOMMEND_MARKETS.map(m => {
+                  const mkt = MARKETS.find(x => x.id === m);
+                  return (
+                    <label key={m} className="mb-rec-check">
+                      <input
+                        type="checkbox"
+                        checked={!!enabledMarkets[m]}
+                        onChange={e => setEnabledMarkets(prev => ({ ...prev, [m]: e.target.checked }))}
+                      />
+                      <span>{mkt ? mkt.label : m}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="mb-rec-field">
+              <span className="mb-rec-field-label">Preference</span>
+              <div className="mb-rec-radios">
+                {[
+                  { id: 'maximize_seqs', label: 'Maximize sequences/day' },
+                  { id: 'minimize_caps', label: 'Minimize cap frequency' },
+                  { id: 'balanced', label: 'Balanced' },
+                ].map(opt => (
+                  <label key={opt.id} className="mb-rec-radio">
+                    <input
+                      type="radio"
+                      name="rec-pref"
+                      checked={preference === opt.id}
+                      onChange={() => setPreference(opt.id)}
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="mb-section mb-rec-output">
+          <div className="mb-section-head">
+            <div>
+              <h2 className="mb-section-title">Marti's recommendation</h2>
+              <p className="mb-section-sub">Computed live from observed streak data against your constraints.</p>
+            </div>
+          </div>
+
+          {recommendation.kind === 'empty' && (
+            <div className="mb-rec-empty">Select at least one market to see recommendations.</div>
+          )}
+          {recommendation.kind === 'budget_exceeds_bankroll' && (
+            <div className="mb-rec-empty">Daily budget exceeds total bankroll. Lower the daily allocation or increase bankroll.</div>
+          )}
+          {recommendation.kind === 'budget_too_small' && (
+            <div className="mb-rec-empty">Daily budget too small. Increase to at least $50 to enable any play.</div>
+          )}
+          {recommendation.kind === 'loading' && (
+            <div className="mb-rec-empty mono">Loading streak data for {recommendation.stillLoading.join(', ')}…</div>
+          )}
+          {recommendation.kind === 'none_viable' && (
+            <div className="mb-rec-empty">
+              No market meets your {riskTolerance}% cap rate ceiling. Loosen tolerance, lower N_max, or reduce base bet.
+            </div>
+          )}
+
+          {recommendation.kind === 'ok' && (() => {
+            const r = recommendation.primary;
+            const mkt = MARKETS.find(x => x.id === r.market);
+            const mktLabel = mkt ? mkt.label : r.market;
+            const capsPerDayOk = r.capsPerDay <= (riskTolerance / 100) * r.seqsPerDay;
+            return (
+              <>
+                <div className="mb-rec-primary">
+                  <div className="mb-rec-primary-head">
+                    <Sparkles size={16} strokeWidth={1.8} />
+                    <span className="mono mb-rec-primary-tag">MARTI RECOMMENDS</span>
+                  </div>
+                  <div className="mb-rec-primary-line mono">
+                    Play <span className="gold">{mktLabel}</span> with base bet <span className="gold">${r.B}</span>, cap at N_max=<span className="gold">{r.N_max}</span>
+                  </div>
+                  <div className="mb-rec-primary-sub">
+                    Expected: <span className="mono">{fmtCapRate(r.capRate)}</span> cap rate, <span className="mono">{fmtBankroll(r.perSeqMaxLoss)}</span> max single-sequence loss.
+                  </div>
+                  <div className="mb-kpistrip mb-rec-kpis">
+                    <div className="mb-kpi mb-kpi-primary">
+                      <div className="mb-kpi-label">Sequences / day</div>
+                      <div className="mb-kpi-value mono pos">~{r.seqsPerDay.toFixed(0)}</div>
+                    </div>
+                    <div className="mb-kpi">
+                      <div className="mb-kpi-label">Cap events / day</div>
+                      <div className={`mb-kpi-value mono ${capsPerDayOk ? 'pos' : 'neg'}`}>
+                        {r.capsPerDay >= 1 ? r.capsPerDay.toFixed(1) : r.capsPerDay.toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="mb-kpi">
+                      <div className="mb-kpi-label">Days to deplete budget</div>
+                      <div className="mb-kpi-value mono">
+                        {Number.isFinite(r.daysToDeplete) ? `~${r.daysToDeplete.toFixed(0)}` : '∞'}
+                      </div>
+                    </div>
+                    <div className="mb-kpi">
+                      <div className="mb-kpi-label">Suggested bankroll</div>
+                      <div className="mb-kpi-value mono gold">{fmtBankroll(r.requiredBankroll)}</div>
+                    </div>
+                  </div>
+                  <div className="mb-rec-actions">
+                    <button
+                      type="button"
+                      onClick={onLockIn}
+                      className="mb-rec-lockbtn"
+                      disabled={r.market === market}
+                    >
+                      {r.market === market ? 'Currently active' : 'Lock in this recommendation'}
+                    </button>
+                    {lockedAt && (
+                      <span className="mb-rec-toast mono">Locked in: {mktLabel} is now the active market.</span>
+                    )}
+                  </div>
+                </div>
+
+                {recommendation.alternatives.length > 0 && (
+                  <div className="mb-rec-alts">
+                    <div className="mb-section-head mb-section-head-tight">
+                      <h3 className="mb-section-title-sm">Top alternatives</h3>
+                      <span className="mb-section-meta mono">ranked by score</span>
+                    </div>
+                    <div className="mb-rec-alttable">
+                      <div className="mb-rec-altrow mb-rec-altrow-head">
+                        <span>Market</span>
+                        <span className="mb-rec-altnum">N_max</span>
+                        <span className="mb-rec-altnum">Base bet</span>
+                        <span className="mb-rec-altnum">Cap rate</span>
+                        <span className="mb-rec-altnum">Per-seq loss</span>
+                        <span className="mb-rec-altnum">Score</span>
+                      </div>
+                      {recommendation.alternatives.map((a, i) => {
+                        const am = MARKETS.find(x => x.id === a.market);
+                        return (
+                          <div key={i} className="mb-rec-altrow">
+                            <span>{am ? am.label : a.market}</span>
+                            <span className="mb-rec-altnum mono">{a.N_max}</span>
+                            <span className="mb-rec-altnum mono">${a.B}</span>
+                            <span className="mb-rec-altnum mono">{fmtCapRate(a.capRate)}</span>
+                            <span className="mb-rec-altnum mono">{fmtBankroll(a.perSeqMaxLoss)}</span>
+                            <span className="mb-rec-altnum mono">{a.score.toFixed(1)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          {Object.keys(errorMarkets).length > 0 && (
+            <div className="mb-rec-errors">
+              {Object.entries(errorMarkets).map(([m, msg]) => (
+                <div key={m} className="mb-rec-error mono">⚠ {m}: {msg}</div>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // STREAKS VIEW (v9 Phase 1)
 // ============================================================
 
@@ -4611,6 +4958,181 @@ letter-spacing: 0.08em;
 @media (max-width: 560px) {
   .mb-plain-verdict { flex-direction: column; align-items: flex-start; gap: 6px; }
   .mb-plain-section-body { padding-left: 0; }
+}
+
+/* v9 Phase 3b: Recommend view layout */
+.mb-rec-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.4fr) 1fr;
+  gap: var(--sp-md);
+}
+@media (max-width: 880px) {
+  .mb-rec-layout { grid-template-columns: 1fr; }
+}
+.mb-rec-input-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-md);
+  padding: var(--sp-md);
+}
+.mb-rec-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mb-rec-field-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.mb-rec-field-warn .mb-numinput {
+  border-color: var(--red);
+}
+.mb-rec-field-warn-msg {
+  font-size: var(--fs-xs);
+  color: var(--red-bright);
+}
+.mb-rec-checks, .mb-rec-radios {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mb-rec-check, .mb-rec-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  color: var(--text);
+}
+.mb-rec-check input, .mb-rec-radio input {
+  accent-color: var(--teal);
+  cursor: pointer;
+}
+
+.mb-rec-empty {
+  padding: var(--sp-lg) var(--sp-md);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.mb-rec-primary {
+  padding: var(--sp-md);
+  border-bottom: 1px solid var(--border);
+}
+.mb-rec-primary-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--gold-bright);
+  margin-bottom: 8px;
+}
+.mb-rec-primary-tag {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.12em;
+  font-weight: 600;
+}
+.mb-rec-primary-line {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+  margin-bottom: 4px;
+}
+.mb-rec-primary-sub {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  margin-bottom: var(--sp-md);
+}
+.mb-rec-kpis {
+  grid-template-columns: repeat(2, 1fr);
+  margin-bottom: var(--sp-md);
+}
+@media (max-width: 560px) {
+  .mb-rec-kpis { grid-template-columns: 1fr; }
+}
+.mb-rec-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-md);
+  flex-wrap: wrap;
+}
+.mb-rec-lockbtn {
+  padding: 8px 14px;
+  border-radius: 3px;
+  border: 1px solid var(--gold-bright);
+  background: rgba(199, 162, 107, 0.18);
+  color: var(--gold-bright);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+.mb-rec-lockbtn:hover:not(:disabled) {
+  background: rgba(199, 162, 107, 0.30);
+  color: var(--text);
+}
+.mb-rec-lockbtn:disabled {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--dim);
+  cursor: default;
+}
+.mb-rec-toast {
+  font-size: var(--fs-xs);
+  color: var(--teal-bright);
+  padding: 4px 8px;
+  background: rgba(61, 110, 82, 0.15);
+  border: 1px solid var(--teal);
+  border-radius: 2px;
+  letter-spacing: 0.02em;
+}
+
+.mb-rec-alts { padding: 0 var(--sp-md) var(--sp-md); }
+.mb-rec-alttable {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.mb-rec-altrow {
+  display: grid;
+  grid-template-columns: 1.2fr 0.6fr 0.7fr 0.8fr 1fr 0.7fr;
+  gap: var(--sp-sm);
+  padding: 8px var(--sp-md);
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+  font-size: var(--fs-sm);
+}
+.mb-rec-altrow:last-child { border-bottom: 0; }
+.mb-rec-altrow-head {
+  background: var(--s2);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+.mb-rec-altnum { text-align: right; }
+@media (max-width: 560px) {
+  .mb-rec-altrow { grid-template-columns: 1.4fr 0.6fr 0.8fr 1fr; }
+  .mb-rec-altnum:nth-child(5), .mb-rec-altnum:nth-child(6) { display: none; }
+}
+
+.mb-rec-errors { padding: 0 var(--sp-md) var(--sp-md); }
+.mb-rec-error {
+  font-size: var(--fs-xs);
+  color: var(--red-bright);
+  padding: 4px 0;
 }
 
 /* v8.2: Disclaimer footer */
