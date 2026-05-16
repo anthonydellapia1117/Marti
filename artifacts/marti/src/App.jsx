@@ -726,7 +726,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.0-prescribe',
+version: 'v9.0-polish',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1013,7 +1013,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.0-prescribe</span>
+<span className="mb-brand-ver mono">v9.0-polish</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -2397,10 +2397,10 @@ exportState={exportState}
       <div className="mb-contextbar-sub">{edgeClass.desc}</div>
     </div>
   </div>
-  {market === 'spx' && (
+  {market === 'spx1h' && (
     <div className="mb-spx-disclosure">
-      SPX market uses SPY ETF as a 1:1 directional proxy for the S&amp;P 500. Real prediction markets
-      (e.g. IBKR ForecastTrader, Kalshi) may have non-parity contract pricing and slippage that affect
+      Note: SPX 1H uses SPY ETF prices as a proxy for S&amp;P 500 because TwelveData doesn't provide direct SPX data on free tier.
+      Real prediction markets (e.g. IBKR ForecastTrader, Kalshi) may have non-parity contract pricing and slippage that affect
       realized P&amp;L. This dashboard tests pure market direction; market structure costs are not modeled.
     </div>
   )}
@@ -2425,48 +2425,17 @@ exportState={exportState}
       />
       <EdgeMeter p={p} />
     </ParamControl>
-    <ParamControl label="b₀" hint="Base bet">
-      <input
-        type="number"
-        value={b0}
-        min={1}
-        step={1}
-        onChange={e => setB0(parseFloat(e.target.value) || 1)}
-        className="mb-numinput mono"
-      />
+    <ParamControl label={<>b₀ <Hint term="Base bet">The first bet at the start of each sequence. Doubled (×m) after each loss until win or cap.</Hint></>} hint="Base bet">
+      <NumberField value={b0} onCommit={setB0} defaultValue={5} min={1} step={1} integer ariaLabel="Base bet" />
     </ParamControl>
-    <ParamControl label="m" hint="Multiplier">
-      <input
-        type="number"
-        value={m}
-        step={0.1}
-        min={1.1}
-        max={5}
-        onChange={e => setM(parseFloat(e.target.value) || 2)}
-        className="mb-numinput mono"
-      />
+    <ParamControl label={<>m <Hint term="Multiplier">Factor by which the bet is multiplied after each loss. 2× is classic Martingale; lower values grow exposure more slowly.</Hint></>} hint="Multiplier">
+      <NumberField value={m} onCommit={setM} defaultValue={2} min={1.1} max={5} step={0.1} ariaLabel="Multiplier" />
     </ParamControl>
-    <ParamControl label="N" hint="Max steps">
-      <input
-        type="number"
-        value={N_max}
-        step={1}
-        min={2}
-        max={12}
-        onChange={e => setNMax(parseInt(e.target.value) || 6)}
-        className="mb-numinput mono"
-      />
+    <ParamControl label={<>N <Hint term="N_max (cap)">Max consecutive losses before the bot gives up on a sequence and accepts the cumulative loss. Caps tail risk at the cost of conceding some sequences.</Hint></>} hint="Max steps">
+      <NumberField value={N_max} onCommit={setNMax} defaultValue={6} min={2} max={12} step={1} integer ariaLabel="Max ladder steps" />
     </ParamControl>
     <ParamControl label="#" hint="Sequences">
-      <input
-        type="number"
-        value={num}
-        step={1000}
-        min={100}
-        max={50000}
-        onChange={e => setNum(parseInt(e.target.value) || 1000)}
-        className="mb-numinput mono"
-      />
+      <NumberField value={num} onCommit={setNum} defaultValue={10000} min={100} max={50000} step={1000} integer ariaLabel="Sequence count" />
     </ParamControl>
     <div className="mb-param-actions">
       <button
@@ -2988,6 +2957,82 @@ if (positive) return <ArrowUp size={size} strokeWidth={2.5} />;
 return <ArrowDown size={size} strokeWidth={2.5} />;
 }
 
+// v9 Polish: Number input that allows empty state, commits on blur/Enter, resets to default on clear.
+function NumberField({ value, onCommit, defaultValue, min, max, step = 1, integer, ariaLabel }) {
+  const [displayValue, setDisplayValue] = useState(String(value));
+  const focusedRef = useRef(false);
+  useEffect(() => {
+    if (!focusedRef.current) setDisplayValue(String(value));
+  }, [value]);
+
+  const commit = (raw) => {
+    if (raw === '' || raw == null) {
+      onCommit(defaultValue);
+      setDisplayValue(String(defaultValue));
+      return;
+    }
+    const n = integer ? parseInt(raw, 10) : parseFloat(raw);
+    if (!Number.isFinite(n)) {
+      onCommit(defaultValue);
+      setDisplayValue(String(defaultValue));
+      return;
+    }
+    let clamped = n;
+    if (min != null) clamped = Math.max(min, clamped);
+    if (max != null) clamped = Math.min(max, clamped);
+    onCommit(clamped);
+    setDisplayValue(String(clamped));
+  };
+
+  return (
+    <div className="mb-numfield">
+      <input
+        type="number"
+        value={displayValue}
+        min={min}
+        max={max}
+        step={step}
+        onChange={e => setDisplayValue(e.target.value)}
+        onFocus={() => { focusedRef.current = true; }}
+        onBlur={() => { focusedRef.current = false; commit(displayValue); }}
+        onKeyDown={e => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
+        className="mb-numinput mono"
+        aria-label={ariaLabel}
+      />
+      <button
+        type="button"
+        onMouseDown={e => e.preventDefault()}
+        onClick={() => commit('')}
+        className="mb-numfield-reset"
+        title={`Reset to ${defaultValue}`}
+        aria-label={`Reset to ${defaultValue}`}
+      >×</button>
+    </div>
+  );
+}
+
+// v9 Polish: Lightweight hint popover. Click the (?) to toggle a short plain-English explanation.
+function Hint({ term, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="mb-hint">
+      <button
+        type="button"
+        className="mb-hint-icon"
+        aria-label={`Help: ${term}`}
+        aria-expanded={open}
+        onClick={(e) => { e.stopPropagation(); e.preventDefault(); setOpen(o => !o); }}
+        onBlur={() => setOpen(false)}
+      >?</button>
+      {open && (
+        <span className="mb-hint-popup" role="tooltip">
+          <strong>{term}:</strong> {children}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function LoadingPanel() {
 return (
 <div className="mb-loading">
@@ -3298,7 +3343,7 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
             </label>
             <label className="mb-rec-field">
               <span className="mb-rec-field-label">
-                Risk tolerance (cap rate ceiling) <span className="mono">{riskTolerance}%</span>
+                Risk tolerance (cap rate ceiling) <Hint term="Cap rate ceiling">Marti will only recommend configs where the empirical cap rate stays below this percentage. Lower = pickier.</Hint> <span className="mono">{riskTolerance}%</span>
               </span>
               <input
                 type="range" min={1} max={25} step={1}
@@ -3779,7 +3824,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
           </div>
           <div className="mb-streak-funding-row">
             <div className="mb-streak-funding-label">
-              <span>N_max (cap-at-N)</span>
+              <span>N_max (cap-at-N) <Hint term="N_max">Max consecutive losses before the bot accepts defeat on a sequence. Larger N_max = more survival, larger possible single-sequence loss.</Hint></span>
               <span className="mono mb-streak-funding-val">{bankrollNMax}</span>
             </div>
             <input
@@ -3810,11 +3855,11 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
             <div className="mb-streak-scenario-title">Capped strategy (N_max = {bankrollNMax})</div>
             <div className="mb-streak-scenario-kpis">
               <div className="mb-kpi mb-kpi-primary">
-                <div className="mb-kpi-label">Per-sequence max loss</div>
+                <div className="mb-kpi-label">Per-sequence max loss <Hint term="Per-sequence max loss">Total dollars lost if a single Martingale ladder reaches N_max consecutive losses: B × (m^N_max − 1)/(m − 1).</Hint></div>
                 <div className="mb-kpi-value mono gold">{fmtBankroll(funding.perSeqMaxLoss)}</div>
               </div>
               <div className="mb-kpi">
-                <div className="mb-kpi-label">Expected cap rate</div>
+                <div className="mb-kpi-label">Expected cap rate <Hint term="Cap rate">Fraction of outcomes that fall inside an empirical streak of length ≥ N_max. A proxy for how often the bot's ladder will get capped.</Hint></div>
                 <div className="mb-kpi-value mono">{fmtCapRate(funding.capRate)}</div>
               </div>
               <div className="mb-kpi">
@@ -4958,6 +5003,82 @@ letter-spacing: 0.08em;
 @media (max-width: 560px) {
   .mb-plain-verdict { flex-direction: column; align-items: flex-start; gap: 6px; }
   .mb-plain-section-body { padding-left: 0; }
+}
+
+/* v9 Polish: NumberField wrapper with inline reset */
+.mb-numfield { position: relative; display: inline-block; }
+.mb-numfield .mb-numinput { padding-right: 22px; width: 100%; }
+.mb-numfield-reset {
+  position: absolute;
+  right: 4px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 0;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 14px; line-height: 1;
+  padding: 0;
+  border-radius: 2px;
+  transition: color 0.15s, background 0.15s;
+}
+.mb-numfield-reset:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+
+/* v9 Polish: Hint popover */
+.mb-hint { position: relative; display: inline-block; vertical-align: baseline; margin-left: 2px; }
+.mb-hint-icon {
+  display: inline-flex;
+  align-items: center; justify-content: center;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid var(--dim);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
+  cursor: help;
+  padding: 0;
+  font-family: inherit;
+  vertical-align: 1px;
+  line-height: 1;
+  transition: color 0.15s, border-color 0.15s;
+}
+.mb-hint-icon:hover, .mb-hint-icon[aria-expanded="true"] {
+  color: var(--teal-bright);
+  border-color: var(--teal);
+}
+.mb-hint-popup {
+  position: absolute;
+  z-index: 60;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--s2);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--gold);
+  border-radius: 3px;
+  padding: 8px 10px;
+  width: 240px;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  font-family: 'Outfit', -apple-system, system-ui, sans-serif;
+  white-space: normal;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.mb-hint-popup strong { color: var(--gold-bright); font-weight: 600; }
+@media (max-width: 560px) {
+  .mb-hint-popup { width: 180px; }
+}
+
+/* v9 Polish: keep TopBar toggle visible on very narrow screens */
+@media (max-width: 480px) {
+  .mb-topbar-right { gap: 6px; }
+  .mb-plain-toggle { padding: 3px 6px; font-size: 10px; }
+  .mb-clock { font-size: 11px; }
+  .mb-brand-ver { font-size: 9px; }
 }
 
 /* v9 Phase 3b: Recommend view layout */
