@@ -23,6 +23,22 @@ const LOGO_DATA_URI = "data:image/webp;base64,UklGRqgSAABXRUJQVlA4IJwSAAAwWwCdAS
 // SIM ENGINE
 // ============================================================
 
+// v9.2: realistic odds modeling. Real markets rarely pay parity; sportsbook lines like -200
+// mean you only get back half your stake on a win. MARKET_DEFAULTS provides per-market priors.
+const MARKET_DEFAULTS = {
+  btc15:  { defaultOdds: 100, label: '+100 (parity)', priceModel: 'binary_parity' },
+  spx1h:  { defaultOdds: 100, label: '+100 (parity)', priceModel: 'binary_parity' },
+  mlb:    { defaultOdds: -200, label: '-200 (typical sportsbook)', priceModel: 'sportsbook' },
+  custom: { defaultOdds: 100, label: '+100 (parity)', priceModel: 'binary_parity' },
+};
+
+// American odds → win payout multiplier per $1 staked. +100 = 1.0, -150 = 0.667, -200 = 0.5.
+function payoutMultiplier(americanOdds) {
+  if (!Number.isFinite(americanOdds) || americanOdds === 0) return 1;
+  if (americanOdds > 0) return americanOdds / 100;
+  return 100 / Math.abs(americanOdds);
+}
+
 function runSequence(p, b0, m, N_max, r) {
 let profit = 0, betSize = b0, maxBet = b0;
 for (let k = 1; k <= N_max; k++) {
@@ -578,6 +594,12 @@ const [guidedStep, setGuidedStep] = useState(() => {
 });
 const [guidedInputs, setGuidedInputs] = useState({ bankroll: 50000, dailyBudget: 1500, comfort: 'balanced' });
 const [pendingRun, setPendingRun] = useState(false);
+// v9.2: American odds for win payouts; default depends on market and resets when market changes
+const [odds, setOdds] = useState(() => MARKET_DEFAULTS.btc15.defaultOdds);
+useEffect(() => {
+  const d = MARKET_DEFAULTS[market];
+  if (d) setOdds(d.defaultOdds);
+}, [market]);
 const [runCount, setRunCount] = useState(0);
 const [now, setNow] = useState(new Date());
 const [autoSeed, setAutoSeed] = useState(0);
@@ -598,10 +620,11 @@ setRunning(true);
 setDataError(null);
 try {
 if (market === 'custom') {
-const main = simulate({ p, b0, m, N_max, r: 1.0, num });
+const r = payoutMultiplier(odds);
+const main = simulate({ p, b0, m, N_max, r, num });
 const scens = SCENARIOS.map(s => ({
 ...s,
-...simulate({ p: s.p, b0, m, N_max, r: 1.0, num: Math.min(num, 5000) })
+...simulate({ p: s.p, b0, m, N_max, r, num: Math.min(num, 5000) })
 }));
 const conc = simulateConcurrent(p, b0, m, N_max, 5, 8000);
 // v9 Phase 1: synthesize a binary outcome stream from p so Streaks tab has data
@@ -621,13 +644,14 @@ if (!payload.outcomes || payload.outcomes.length === 0) {
 throw new Error(`No outcomes returned for ${market}. Try Refresh data or a different market.`);
 }
 const obsP = observedWinRate(payload.outcomes);
-const main = buildSequencesFromOutcomes(payload.outcomes, b0, m, N_max, 1.0);
+const r = payoutMultiplier(odds);
+const main = buildSequencesFromOutcomes(payload.outcomes, b0, m, N_max, r);
 if (!main) throw new Error('Could not build any sequences from real outcomes.');
 setRawOutcomes(payload.outcomes);
 setP(obsP);
 const scens = SCENARIOS.map(s => ({
 ...s,
-...simulate({ p: s.p, b0, m, N_max, r: 1.0, num: Math.min(num, 5000) })
+...simulate({ p: s.p, b0, m, N_max, r, num: Math.min(num, 5000) })
 }));
 const conc = simulateConcurrent(obsP, b0, m, N_max, 5, 8000);
 setResults(main);
@@ -655,7 +679,7 @@ setDataError(err && err.message ? err.message : String(err));
 } finally {
 setRunning(false);
 }
-}, [p, b0, m, N_max, num, market]);
+}, [p, b0, m, N_max, num, market, odds]);
 
 // Stale = displaying data for a different market than currently selected
 const isStale = !!(dataInfo?.source === 'real' && dataInfo.market && dataInfo.market !== market);
@@ -770,7 +794,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.1.3-skip-intro',
+version: 'v9.2-realistic-odds',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -904,6 +928,7 @@ return (
         period={period}
         isStale={isStale}
         p={p} b0={b0} m={m} N_max={N_max}
+        odds={odds}
         expectedWorst={expectedWorst}
         breakevenP={breakevenP}
       />
@@ -935,6 +960,7 @@ return (
         N_max={N_max} setNMax={setNMax}
         num={num} setNum={setNum}
         market={market} setMarket={setMarket}
+        odds={odds} setOdds={setOdds}
         onRun={handleRun}
         expectedWorst={expectedWorst}
         period={period}
@@ -1091,7 +1117,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.1.3-skip-intro</span>
+<span className="mb-brand-ver mono">v9.2-realistic-odds</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -2442,7 +2468,7 @@ num={num}
 
 function WorkspaceView({
 results, running, p, setP, b0, setB0, m, setM, N_max, setNMax,
-num, setNum, market, setMarket, onRun, expectedWorst, period, edgeClass, mode,
+num, setNum, market, setMarket, odds, setOdds, onRun, expectedWorst, period, edgeClass, mode,
 concurrent, moneyBreakdown, applyPreset, exportState
 }) {
 const [chartTab, setChartTab] = useState('equity');
@@ -2545,6 +2571,22 @@ exportState={exportState}
     </ParamControl>
     <ParamControl label={<># <HelpIcon title="What is a sequence?" explanation="One round of the betting strategy from start to end (either a win or hitting the cap)." example="10,000 sequences means we simulate 10,000 separate rounds to see the overall results." /></>} hint="Sequences">
       <NumberField value={num} onCommit={setNum} defaultValue={10000} min={100} max={50000} step={1000} integer ariaLabel="Sequence count" />
+    </ParamControl>
+    <ParamControl
+      label={<>odds <HelpIcon title="What are assumed odds?" explanation="American odds for your bets. +100 means parity (winning $1 for every $1 bet). -150 means you bet $1.50 to win $1 — typical sportsbook line. Real markets are rarely +100." example="MLB no-score inning typically trades at -200 to -250 (sportsbooks) or 60–75¢ on Kalshi." /></>}
+      hint="American"
+      value={`${payoutMultiplier(odds).toFixed(2)}× payout`}
+    >
+      <NumberField
+        value={odds}
+        onCommit={(v) => { if (v !== 0) setOdds(v); }}
+        defaultValue={MARKET_DEFAULTS[market]?.defaultOdds ?? 100}
+        min={-1000}
+        max={1000}
+        step={10}
+        integer
+        ariaLabel="Assumed American odds"
+      />
     </ParamControl>
     <div className="mb-param-actions">
       <button
@@ -3272,7 +3314,7 @@ const PLAIN_WHAT_IM_DOING = {
   custom: "You're running a simulation with a custom win probability. This is NOT real market data.",
 };
 
-function PlainEnglishCard({ results, outcomes, market, dataInfo, period, isStale, p, b0, m, N_max }) {
+function PlainEnglishCard({ results, outcomes, market, dataInfo, period, isStale, p, b0, m, N_max, odds = 100 }) {
   const hasOutcomes = !!(outcomes && outcomes.length > 0);
   const hasResults = !!results;
   const isSimulated = market === 'custom';
@@ -3332,6 +3374,7 @@ function PlainEnglishCard({ results, outcomes, market, dataInfo, period, isStale
             Showing data from {dataInfo.market.toUpperCase()}, not current selection
           </span>
         )}
+        <span className="mb-plain-warn-chip mono">{odds >= 0 ? '+' : ''}{odds} odds · wins pay {payoutMultiplier(odds).toFixed(2)}× bet</span>
       </div>
 
       <div className={`mb-plain-verdict mb-plain-verdict-${verdict.tone}`}>
@@ -3698,7 +3741,8 @@ function GuidedScreen3({ inputs, onBack, onNext }) {
         const capsPerDay = capCount / totalDays;
         const rm = computeRiskMetrics(bankroll, perSeqMaxLoss, capRate, seqsPerDay, 30);
         if (rm.pRuin > 0.05) continue;
-        const expectedDailyProfit = seqsPerDay * (winRate * B - capRate * perSeqMaxLoss);
+        const mr = payoutMultiplier(MARKET_DEFAULTS[m]?.defaultOdds ?? 100);
+        const expectedDailyProfit = seqsPerDay * (winRate * B * mr - capRate * perSeqMaxLoss);
         let score;
         if (preference === 'maximize_seqs') score = seqsPerDay;
         else if (preference === 'minimize_caps') score = (1 - capRate) * 1000;
@@ -3843,10 +3887,11 @@ function GuidedScreen4({ inputs, onShowResult, onGoExpert, onRestart }) {
         const seqsPerDay = outcomesPerDay / avgSeqLen;
         const rm = computeRiskMetrics(bankroll, perSeqMaxLoss, capRate, seqsPerDay, 30);
         if (rm.pRuin > 0.05) continue;
+        const mr = payoutMultiplier(MARKET_DEFAULTS[m]?.defaultOdds ?? 100);
         let score;
         if (preference === 'maximize_seqs') score = seqsPerDay;
         else if (preference === 'minimize_caps') score = (1 - capRate) * 1000;
-        else score = seqsPerDay * (winRate * B - capRate * perSeqMaxLoss);
+        else score = seqsPerDay * (winRate * B * mr - capRate * perSeqMaxLoss);
         configs.push({ market: m, N_max, B, score });
       }
     }
@@ -3891,8 +3936,9 @@ function GuidedScreen4({ inputs, onShowResult, onGoExpert, onRestart }) {
   );
 }
 
-// v9.1.2: Walks the last ~7 days of outcomes through the bot's ladder and reports per-day P&L.
-function simulateLastWeek(outcomes, B, m, N_max) {
+// v9.1.2 / v9.2: Walks the last ~7 days of outcomes through the bot's ladder.
+// `r` is the payout multiplier (1.0 at parity, 0.5 at -200 odds, etc.). Wins pay bet*r, not bet.
+function simulateLastWeek(outcomes, B, m, N_max, r = 1) {
   const dailyPL = new Map();
   const bumpDay = (t, delta) => {
     const day = new Date(t).toISOString().slice(0, 10);
@@ -3904,7 +3950,7 @@ function simulateLastWeek(outcomes, B, m, N_max) {
     let bet = B, k = 0, won = false;
     while (k < N_max && i < outcomes.length) {
       const o = outcomes[i];
-      if (o.win === 1) { bumpDay(o.t, bet); won = true; i++; winRounds++; break; }
+      if (o.win === 1) { bumpDay(o.t, bet * r); won = true; i++; winRounds++; break; }
       bumpDay(o.t, -bet);
       i++; k++; bet *= m;
     }
@@ -3962,10 +4008,11 @@ function GuidedScreen5({ inputs, onBack, onSeeFullMath }) {
         const seqsPerDay = outcomesPerDay / avgSeqLen;
         const rm = computeRiskMetrics(bankroll, perSeqMaxLoss, capRate, seqsPerDay, 30);
         if (rm.pRuin > 0.05) continue;
+        const mr = payoutMultiplier(MARKET_DEFAULTS[m]?.defaultOdds ?? 100);
         let score;
         if (preference === 'maximize_seqs') score = seqsPerDay;
         else if (preference === 'minimize_caps') score = (1 - capRate) * 1000;
-        else score = seqsPerDay * (winRate * B - capRate * perSeqMaxLoss);
+        else score = seqsPerDay * (winRate * B * mr - capRate * perSeqMaxLoss);
         configs.push({ market: m, N_max, B, score });
       }
     }
@@ -3984,7 +4031,10 @@ function GuidedScreen5({ inputs, onBack, onSeeFullMath }) {
     const cutoff = last - 7 * 86400000;
     const last7 = outcomes.filter(o => o.t >= cutoff);
     if (last7.length === 0) return null;
-    const result = simulateLastWeek(last7, primary.B, REC_MULTIPLIER, primary.N_max);
+    const md = MARKET_DEFAULTS[primary.market];
+    const r = payoutMultiplier(md?.defaultOdds ?? 100);
+    const result = simulateLastWeek(last7, primary.B, REC_MULTIPLIER, primary.N_max, r);
+    result._oddsLabel = md?.label ?? '+100 (parity)';
     return result;
   }, [primary, outcomesByMarket]);
 
@@ -4028,6 +4078,7 @@ function GuidedScreen5({ inputs, onBack, onSeeFullMath }) {
       <p className="mb-guided-sub">
         If you had played <strong>{mktLabel}{dirLabel}</strong> with <span className="mono gold">${primary.B}</span> bets capped at <span className="mono gold">{primary.N_max}</span> doubles over the past <span className="mono">{sim.daysPlayed}</span> days…
       </p>
+      <p className="mb-guided-odds-notice mono">At <strong>{sim._oddsLabel}</strong> odds (typical for {mktLabel})</p>
 
       <div className={`mb-guided-verdict mb-guided-verdict-${verdictTone}`}>
         <VerdictIcon size={28} strokeWidth={2} />
@@ -4163,11 +4214,12 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
         const rm = computeRiskMetrics(bankroll, perSeqMaxLoss, capRate, seqsPerDay, 30);
         if (rm.pRuin > 0.05) continue;
         const pRuin30 = rm.pRuin;
-        // v9 Scoring v2: "max_profit" is the new default — expected daily $ from win-rate × bet vs cap-rate × per-seq loss.
+        const mr = payoutMultiplier(MARKET_DEFAULTS[m]?.defaultOdds ?? 100);
+        // v9 Scoring v2 / v9.2: "max_profit" is the default — expected $/day, now odds-adjusted.
         let score;
         if (preference === 'maximize_seqs') score = seqsPerDay;
         else if (preference === 'minimize_caps') score = (1 - capRate) * 1000;
-        else score = seqsPerDay * (winRate * B - capRate * perSeqMaxLoss);
+        else score = seqsPerDay * (winRate * B * mr - capRate * perSeqMaxLoss);
         configs.push({
           market: m, N_max, B, capRate, perSeqMaxLoss, finalBetSize,
           seqsPerDay, capsPerDay, requiredBankroll, daysToDeplete, score, winRate, pRuin30,
@@ -6626,6 +6678,15 @@ letter-spacing: 0.08em;
   outline-offset: 2px;
   border-radius: 2px;
 }
+
+/* v9.2: inline odds notice on Step 5 above the verdict */
+.mb-guided-odds-notice {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.mb-guided-odds-notice strong { color: var(--gold-bright); font-weight: 600; }
 
 .mb-guided-field {
   display: flex; flex-direction: column; gap: 6px;
