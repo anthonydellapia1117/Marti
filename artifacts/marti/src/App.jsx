@@ -794,7 +794,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.2-realistic-odds',
+version: 'v9.2.1-skip-btn',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1117,7 +1117,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.2-realistic-odds</span>
+<span className="mb-brand-ver mono">v9.2.1-skip-btn</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -3544,13 +3544,14 @@ function GuidedScreen1({ onNext }) {
     try { return localStorage.getItem('marti_skip_welcome') === 'true'; }
     catch { return false; }
   });
-  const handleNext = () => {
+  const persistSkipPref = () => {
     try {
       if (skipNext) localStorage.setItem('marti_skip_welcome', 'true');
       else localStorage.removeItem('marti_skip_welcome');
     } catch {}
-    onNext();
   };
+  const handleNext = () => { persistSkipPref(); onNext(); };
+  const handleSkip = () => { persistSkipPref(); onNext(); };
   return (
     <div className="mb-guided-card mb-guided-anim">
       <h2 className="mb-guided-title">Welcome to Marti</h2>
@@ -3592,8 +3593,8 @@ function GuidedScreen1({ onNext }) {
         />
         <span>Don't show this intro again</span>
       </label>
-      <div className="mb-guided-actions">
-        <span />
+      <div className="mb-guided-actions mb-guided-actions-welcome">
+        <button type="button" className="mb-guided-btn-secondary mb-guided-btn-skip" onClick={handleSkip}>Skip</button>
         <button type="button" className="mb-guided-btn-primary" onClick={handleNext}>Let's go →</button>
       </div>
     </div>
@@ -6677,6 +6678,18 @@ letter-spacing: 0.08em;
   outline: 2px solid var(--teal);
   outline-offset: 2px;
   border-radius: 2px;
+}
+
+/* v9.2.1: welcome screen — both buttons on the right, stacked Skip-on-top on mobile */
+.mb-guided-actions-welcome {
+  justify-content: flex-end;
+  gap: var(--sp-sm);
+}
+@media (max-width: 560px) {
+  .mb-guided-actions-welcome {
+    flex-direction: column;
+  }
+  .mb-guided-actions-welcome > button { width: 100%; }
 }
 
 /* v9.2: inline odds notice on Step 5 above the verdict */
