@@ -759,7 +759,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.0-direction',
+version: 'v9.0-scoring-v2',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1046,7 +1046,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.0-direction</span>
+<span className="mb-brand-ver mono">v9.0-scoring-v2</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -3248,7 +3248,8 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
   const [dailyBudget, setDailyBudget] = useState(1_500);
   const [riskTolerance, setRiskTolerance] = useState(5);
   const [enabledMarkets, setEnabledMarkets] = useState({ btc15: true, spx1h: true, mlb: true });
-  const [preference, setPreference] = useState('balanced');
+  // v9 Scoring v2: new default "max_profit" maximizes expected daily $ profit instead of seqsPerDay·(1−capRate)
+  const [preference, setPreference] = useState('max_profit');
   const [outcomesByMarket, setOutcomesByMarket] = useState(() => {
     return currentOutcomes && market && REC_RECOMMEND_MARKETS.includes(market)
       ? { [market]: { outcomes: currentOutcomes, start: null, end: null } }
@@ -3329,10 +3330,11 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
         const daysToDeplete = capsPerDay > 0 && perSeqMaxLoss > 0
           ? dailyBudget / (capsPerDay * perSeqMaxLoss)
           : Infinity;
+        // v9 Scoring v2: "max_profit" is the new default — expected daily $ from win-rate × bet vs cap-rate × per-seq loss.
         let score;
         if (preference === 'maximize_seqs') score = seqsPerDay;
         else if (preference === 'minimize_caps') score = (1 - capRate) * 1000;
-        else score = seqsPerDay * (1 - capRate);
+        else score = seqsPerDay * (winRate * B - capRate * perSeqMaxLoss);
         configs.push({
           market: m, N_max, B, capRate, perSeqMaxLoss, finalBetSize,
           seqsPerDay, capsPerDay, requiredBankroll, daysToDeplete, score, winRate,
@@ -3415,9 +3417,9 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
               <span className="mb-rec-field-label">Preference</span>
               <div className="mb-rec-radios">
                 {[
-                  { id: 'maximize_seqs', label: 'Maximize sequences/day' },
-                  { id: 'minimize_caps', label: 'Minimize cap frequency' },
-                  { id: 'balanced', label: 'Balanced' },
+                  { id: 'max_profit', label: 'Maximize daily profit', hint: 'Highest expected dollar return per day — picks the largest base bet that fits your cap-rate ceiling.' },
+                  { id: 'maximize_seqs', label: 'Maximize sequences/day', hint: 'Most ladders run per day, regardless of size. Picks whichever (market, N_max) cycles fastest under your cap-rate ceiling.' },
+                  { id: 'minimize_caps', label: 'Minimize cap frequency', hint: 'Fewest cap events expected; smallest single-sequence losses. Picks the highest N_max viable for a smaller base bet.' },
                 ].map(opt => (
                   <label key={opt.id} className="mb-rec-radio">
                     <input
@@ -3426,7 +3428,7 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
                       checked={preference === opt.id}
                       onChange={() => setPreference(opt.id)}
                     />
-                    <span>{opt.label}</span>
+                    <span>{opt.label} <Hint term={opt.label}>{opt.hint}</Hint></span>
                   </label>
                 ))}
               </div>
