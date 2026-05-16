@@ -723,7 +723,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.0-streaks-preview',
+version: 'v9.0-streaks-funding',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -989,7 +989,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.0-streaks-preview</span>
+<span className="mb-brand-ver mono">v9.0-streaks-funding</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -2967,6 +2967,11 @@ return (
 // ============================================================
 
 function StreaksView({ outcomes, market, dataInfo, isStale }) {
+  // v9 Phase 2: Survival funding calculator inputs
+  const [bankrollBase, setBankrollBase] = useState(5);
+  const [bankrollM, setBankrollM] = useState(2.0);
+  const [safetyMarginPct, setSafetyMarginPct] = useState(50);
+
   if (!outcomes || outcomes.length === 0) {
     return (
       <div className="mb-view">
@@ -3001,6 +3006,56 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
     : Math.log(n) / Math.log(1 / q);
   const divergencePct = theoreticalMax > 0 ? ((max - theoreticalMax) / theoreticalMax) * 100 : 0;
   const divergenceAbove = divergencePct > 0;
+
+  // v9 Phase 2: Survival funding math — geometric-sum bankroll to survive max + safety margin
+  const funding = useMemo(() => {
+    const targetSurvivalStreak = Math.ceil(max * (1 + safetyMarginPct / 100));
+    const totalLadderBets = targetSurvivalStreak;
+    const requiredBankroll = bankrollM === 1
+      ? bankrollBase * totalLadderBets
+      : bankrollBase * (Math.pow(bankrollM, totalLadderBets) - 1) / (bankrollM - 1);
+    const finalBetSize = bankrollBase * Math.pow(bankrollM, totalLadderBets - 1);
+    const bankrollInBaseBets = requiredBankroll / bankrollBase;
+    const overflow = !Number.isFinite(requiredBankroll) || requiredBankroll > Number.MAX_SAFE_INTEGER;
+    let tier;
+    if (overflow || requiredBankroll >= 10_000_000) tier = 'prohibitive';
+    else if (requiredBankroll >= 1_000_000) tier = 'institutional';
+    else if (requiredBankroll >= 100_000) tier = 'professional';
+    else if (requiredBankroll >= 10_000) tier = 'serious';
+    else tier = 'hobbyist';
+    return { targetSurvivalStreak, totalLadderBets, requiredBankroll, finalBetSize, bankrollInBaseBets, tier, overflow };
+  }, [max, bankrollBase, bankrollM, safetyMarginPct]);
+
+  const verdict = (() => {
+    switch (funding.tier) {
+      case 'hobbyist':
+      case 'serious':
+        return {
+          tone: 'teal',
+          label: funding.tier === 'hobbyist' ? 'HOBBYIST' : 'SERIOUS RETAIL',
+          msg: `Realistic capital requirement for ${mktLabel}. Survives observed max streak (${max}) plus ${safetyMarginPct}% safety margin.`,
+        };
+      case 'professional':
+        return {
+          tone: 'gold',
+          label: 'PROFESSIONAL',
+          msg: 'Professional-tier capital required. Consider scaling base bet down to make this viable at lower capital.',
+        };
+      case 'institutional':
+        return {
+          tone: 'gold-bright',
+          label: 'INSTITUTIONAL',
+          msg: `Institutional-tier capital required. At current base bet of $${bankrollBase}, this market is impractical for retail deployment.`,
+        };
+      case 'prohibitive':
+      default:
+        return {
+          tone: 'red',
+          label: 'CAPITAL-PROHIBITIVE',
+          msg: `Capital required (${fmtBankroll(funding.requiredBankroll)}) is prohibitive. ${mktLabel} cannot be funded to survive max streak at this base bet. Either reduce base bet significantly, cap N_max below max, or skip this market.`,
+        };
+    }
+  })();
 
   let insight;
   if (Math.abs(divergencePct) > 30) {
@@ -3119,8 +3174,93 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
           <span className="mb-streak-legend-item"><span className="mb-streak-swatch" style={{ background: '#d4b787' }}></span>Theoretical (random walk)</span>
         </div>
       </section>
+
+      <section className="mb-section">
+        <div className="mb-section-head">
+          <div>
+            <h2 className="mb-section-title">Survival Funding Calculator</h2>
+            <p className="mb-section-sub">Size starting capital to outlast observed max streak ({max}) plus a safety margin</p>
+          </div>
+        </div>
+
+        <div className="mb-streak-funding-controls">
+          <div className="mb-streak-funding-row">
+            <div className="mb-streak-funding-label">
+              <span>Base bet (B)</span>
+              <span className="mono mb-streak-funding-val">${bankrollBase}</span>
+            </div>
+            <input
+              type="range" min={1} max={100} step={1}
+              value={bankrollBase}
+              onChange={e => setBankrollBase(parseFloat(e.target.value))}
+              className="mb-slider"
+              aria-label="Base bet in dollars"
+            />
+          </div>
+          <div className="mb-streak-funding-row">
+            <div className="mb-streak-funding-label">
+              <span>Multiplier (m)</span>
+              <span className="mono mb-streak-funding-val">{bankrollM.toFixed(1)}×</span>
+            </div>
+            <input
+              type="range" min={1.5} max={3.0} step={0.1}
+              value={bankrollM}
+              onChange={e => setBankrollM(parseFloat(e.target.value))}
+              className="mb-slider"
+              aria-label="Martingale multiplier"
+            />
+          </div>
+          <div className="mb-streak-funding-row">
+            <div className="mb-streak-funding-label">
+              <span>Safety margin</span>
+              <span className="mono mb-streak-funding-val">{safetyMarginPct}%</span>
+            </div>
+            <input
+              type="range" min={0} max={100} step={5}
+              value={safetyMarginPct}
+              onChange={e => setSafetyMarginPct(parseFloat(e.target.value))}
+              className="mb-slider"
+              aria-label="Safety margin percent"
+            />
+          </div>
+        </div>
+
+        <div className="mb-kpistrip mb-streak-funding-kpis">
+          <div className="mb-kpi mb-kpi-primary">
+            <div className="mb-kpi-label">Required bankroll</div>
+            <div className="mb-kpi-value mono gold">{fmtBankroll(funding.requiredBankroll)}</div>
+          </div>
+          <div className="mb-kpi">
+            <div className="mb-kpi-label">Target survival streak</div>
+            <div className="mb-kpi-value mono">{funding.targetSurvivalStreak}</div>
+          </div>
+          <div className="mb-kpi">
+            <div className="mb-kpi-label">Final bet size</div>
+            <div className="mb-kpi-value mono">{fmtBankroll(funding.finalBetSize)}</div>
+          </div>
+          <div className="mb-kpi">
+            <div className="mb-kpi-label">Bankroll as base bets</div>
+            <div className="mb-kpi-value mono">{funding.overflow ? '∞' : `${funding.bankrollInBaseBets.toLocaleString(undefined, { maximumFractionDigits: 0 })}×`}</div>
+          </div>
+        </div>
+
+        <div className={`mb-streak-verdict mb-streak-verdict-${verdict.tone}`}>
+          <span className="mb-streak-verdict-tag mono">{verdict.label}</span>
+          <span className="mb-streak-verdict-msg">{verdict.msg}</span>
+        </div>
+      </section>
     </div>
   );
+}
+
+// v9 Phase 2: format big bankroll values; flips to ∞ when not finite or beyond MAX_SAFE_INTEGER
+function fmtBankroll(v) {
+  if (!Number.isFinite(v) || v > Number.MAX_SAFE_INTEGER) return '∞';
+  if (v >= 1e12) return `$${(v / 1e12).toFixed(1)}T`;
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+  if (v >= 1e3) return `$${(v / 1e3).toFixed(1)}k`;
+  return `$${v.toFixed(0)}`;
 }
 
 function fmtMoney(v, digits = 0) {
@@ -3888,6 +4028,92 @@ letter-spacing: 0.08em;
   width: 10px;
   height: 10px;
   border-radius: 2px;
+}
+
+/* v9 Phase 2: Survival funding calculator */
+.mb-streak-funding-controls {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-md);
+  padding: var(--sp-md);
+  border-bottom: 1px solid var(--border);
+}
+@media (max-width: 720px) {
+  .mb-streak-funding-controls { grid-template-columns: 1fr; }
+}
+.mb-streak-funding-row { display: flex; flex-direction: column; gap: 6px; }
+.mb-streak-funding-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.mb-streak-funding-val { color: var(--text); text-transform: none; letter-spacing: 0; font-size: var(--fs-sm); }
+.mb-streak-funding-kpis {
+  margin: var(--sp-md);
+  grid-template-columns: repeat(2, 1fr);
+}
+@media (max-width: 560px) {
+  .mb-streak-funding-kpis { grid-template-columns: 1fr; }
+}
+.mb-streak-verdict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px var(--sp-md);
+  margin: 0 var(--sp-md) var(--sp-md);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.mb-streak-verdict-tag {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.mb-streak-verdict-msg { flex: 1; }
+.mb-streak-verdict-teal {
+  background: rgba(61, 110, 82, 0.10);
+  border-color: rgba(61, 110, 82, 0.45);
+}
+.mb-streak-verdict-teal .mb-streak-verdict-tag {
+  background: rgba(61, 110, 82, 0.20);
+  color: var(--teal-bright);
+}
+.mb-streak-verdict-gold {
+  background: rgba(199, 162, 107, 0.06);
+  border-color: rgba(199, 162, 107, 0.45);
+}
+.mb-streak-verdict-gold .mb-streak-verdict-tag {
+  background: rgba(199, 162, 107, 0.18);
+  color: var(--gold);
+}
+.mb-streak-verdict-gold-bright {
+  background: rgba(212, 183, 135, 0.12);
+  border-color: rgba(212, 183, 135, 0.55);
+}
+.mb-streak-verdict-gold-bright .mb-streak-verdict-tag {
+  background: rgba(212, 183, 135, 0.25);
+  color: var(--gold-bright);
+}
+.mb-streak-verdict-red {
+  background: rgba(196, 69, 69, 0.08);
+  border-color: rgba(196, 69, 69, 0.45);
+}
+.mb-streak-verdict-red .mb-streak-verdict-tag {
+  background: rgba(196, 69, 69, 0.18);
+  color: var(--red-bright);
+}
+@media (max-width: 560px) {
+  .mb-streak-verdict { flex-direction: column; align-items: flex-start; gap: 6px; }
 }
 
 /* v8.2: Disclaimer footer */
