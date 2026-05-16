@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef, useId } from 'react';
+import { createPortal } from 'react-dom';
 import {
 LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
 ResponsiveContainer, ReferenceLine, Cell, Area, AreaChart, CartesianGrid
@@ -765,7 +766,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.1-guided',
+version: 'v9.1.1-help-everywhere',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1086,7 +1087,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.1-guided</span>
+<span className="mb-brand-ver mono">v9.1.1-help-everywhere</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -1373,6 +1374,7 @@ date: moneyBreakdown.today ? fmtDateShort(moneyBreakdown.today.dateObj) : ''
 },
 {
 label: "THIS MONTH",
+help: { title: "What is This Month?", explanation: "Profit and loss for the most recent calendar month of the test period.", example: "+$2.1k means the strategy made $2,100 this month across all sequences." },
 value: fmtMoney(moneyBreakdown.monthPnl, 0),
 positive: moneyBreakdown.monthPnl >= 0,
 meta: `${moneyBreakdown.monthCount.toLocaleString()} seq · ${moneyBreakdown.monthWins}W / ${moneyBreakdown.monthCaps}C`,
@@ -1380,6 +1382,7 @@ date: moneyBreakdown.monthLabel
 },
 {
 label: "LIFETIME P&L",
+help: { title: "What is Lifetime P&L?", explanation: "Total profit or loss across all simulated days. Sums every daily P&L in the test period.", example: "+$15.3k means the strategy would have made $15,300 over the full simulation." },
 value: fmtMoney(results.finalProfit, 0),
 positive: results.finalProfit >= 0,
 gold: results.finalProfit >= 0,
@@ -1448,7 +1451,7 @@ return (
 <section className="mb-section">
 <div className="mb-section-head">
 <div>
-<h2 className="mb-section-title">Daily Breakdown</h2>
+<h2 className="mb-section-title">Daily Breakdown <HelpIcon title="What is the daily breakdown?" explanation="P&L grouped by calendar day. Shows wins, caps, and net for each day in the test period." example="A day with +$85 net means the strategy ended that day up $85 across all its sequences." /></h2>
 <p className="mb-section-sub">
 P&L by trading day · {dailySummary.length} days total
 {moneyBreakdown?.bestDay && (
@@ -1538,7 +1541,7 @@ return (
 <section className="mb-section">
 <div className="mb-section-head">
 <div>
-<h2 className="mb-section-title">Sequence Timeline</h2>
+<h2 className="mb-section-title">Sequence Timeline <HelpIcon title="What is the sequence timeline?" explanation="Every individual sequence in time order, with its P&L. Lets you spot streaks of wins or clusters of caps." example="A row of green sequences followed by one red cap shows the strategy's typical rhythm." /></h2>
 <p className="mb-section-sub">
 Each martingale step maps to one <strong className="mono">{mkt.intervalLong}</strong>.
 A worst-case chain of <strong className="mono">{N_max}</strong> losses means{' '}
@@ -1637,7 +1640,7 @@ return (
 <section className="mb-section">
 <div className="mb-section-head">
 <div>
-<h2 className="mb-section-title">Daily Interval Map</h2>
+<h2 className="mb-section-title">Daily Interval Map <HelpIcon title="What is the interval map?" explanation="A heatmap showing wins and losses at every interval in the dataset (e.g. each 15-minute bar for BTC)." example="A row of red cells next to greens shows the empirical sequence of bet outcomes hour-by-hour." /></h2>
 <p className="mb-section-sub">
 Each row is one <strong>{rowLabel.toLowerCase()}</strong>:{' '}
 <strong className="mono">{intervalsPerRow}</strong> {mkt.intervalShort}s ({mkt.winLabel} / {mkt.lossLabel}).
@@ -2091,7 +2094,7 @@ const concurrentRatio = concurrent.maxExposure / ladderTotal;
 return (
 <section className="mb-section">
 <div className="mb-section-head mb-section-head-tight">
-<h3 className="mb-section-title-sm">Concurrent Exposure</h3>
+<h3 className="mb-section-title-sm">Concurrent Exposure <HelpIcon title="What is concurrent exposure?" explanation="If you run multiple sequences in parallel at the same time, this is the worst-case combined money at risk." example="5 parallel chains with max exposure $495 means at peak, 5 sequences had a combined $495 in play." /></h3>
 <span className="mb-section-meta mono">{concurrent.numConcurrent} parallel chains · 8k ticks</span>
 </div>
 <div className="mb-concurrent">
@@ -2255,7 +2258,7 @@ num={num}
   <section className="mb-section">
     <div className="mb-section-head">
       <div>
-        <h2 className="mb-section-title">Scenario Performance</h2>
+        <h2 className="mb-section-title">Scenario Performance <HelpIcon title="What is scenario performance?" explanation="The same strategy run across a range of win-rate scenarios (35%, 45%, 50%, 55%, 60%) so you can see how sensitive P&L is to edge." example="If 50% makes $0 but 55% makes $50k, the strategy is highly edge-dependent." /></h2>
         <p className="mb-section-sub">Ranked by net P&L across {Math.min(num, 5000).toLocaleString()} sequences each</p>
       </div>
       <div className="mb-section-meta mono mb-meta-hide-sm">
@@ -2360,7 +2363,7 @@ num={num}
   <div className="mb-grid-2">
     <section className="mb-section">
       <div className="mb-section-head mb-section-head-tight">
-        <h3 className="mb-section-title-sm">Current Equity Curve</h3>
+        <h3 className="mb-section-title-sm">Current Equity Curve <HelpIcon title="What is the equity curve?" explanation="Running cumulative P&L across every sequence, in order. The shape shows whether profits grow steadily or in bursts." example="A smoothly rising line means consistent wins. Sudden drops are cap events." /></h3>
         <span className="mb-section-meta mono">{num.toLocaleString()} seq</span>
       </div>
       <div className="mb-chart-lg">
@@ -2400,7 +2403,7 @@ num={num}
 
     <section className="mb-section">
       <div className="mb-section-head mb-section-head-tight">
-        <h3 className="mb-section-title-sm">Outcome Distribution</h3>
+        <h3 className="mb-section-title-sm">Outcome Distribution <HelpIcon title="What is the outcome distribution?" explanation="How many sequences ended at each step (won on step 1, step 2, etc.) plus how many hit the cap." example="Most sequences should peak at step 1 (immediate win); a small red bar at N_max shows cap events." /></h3>
         <span className="mb-section-meta mono">avg {results.avgLength.toFixed(2)} steps</span>
       </div>
       <div className="mb-chart-lg">
@@ -2716,7 +2719,7 @@ exportState={exportState}
 
   <section className="mb-section">
     <div className="mb-section-head mb-section-head-tight">
-      <h3 className="mb-section-title-sm">Recent Sequences</h3>
+      <h3 className="mb-section-title-sm">Recent Sequences <HelpIcon title="What is this list?" explanation="The most recent simulated sequences with each one's outcome and P&L. Useful for spot-checking specific edge cases." example="Click a row to expand the bet-by-bet ladder for that sequence." /></h3>
       <span className="mb-section-meta mono">last 30 of {num.toLocaleString()}</span>
     </div>
     <div className="mb-ledger">
@@ -2792,6 +2795,7 @@ const profitFactor = results.capCount > 0
 const insights = [
 {
 title: 'EDGE DECODED',
+help: { title: "What is edge?", explanation: "How much more often you win than you'd expect from a fair coin flip. 50% is no edge; higher is profitable territory.", example: "p = 51% means you win 51 of every 100 bets — a 1-percentage-point edge." },
 headline: `${(p * 100).toFixed(0)}%`,
 headlineColor: edgeClass.tone,
 sub: edgeClass.label.toUpperCase(),
@@ -2804,6 +2808,7 @@ rows: [
 },
 {
 title: 'TIME HORIZON',
+help: { title: "What is the time horizon?", explanation: "How long the test ran in real-world days, plus the data window the results came from.", example: "180 days means we tested across 6 months of real market data." },
 headline: period ? fmtDurationShort(period.totalDays) : '—',
 headlineColor: 'gold',
 rows: period ? [
@@ -2827,6 +2832,7 @@ rows: [
 },
 {
 title: 'BEST ALTERNATIVE',
+help: { title: "What is the best alternative?", explanation: "Of all the scenarios we tested, which one would have made the most money — and how much better than the current setup.", example: "55% edge with +$22k profit means a stronger-edge scenario would have made $22k more than your current settings." },
 headline: `${(best.p * 100).toFixed(0)}% edge`,
 headlineColor: 'teal',
 rows: [
@@ -2849,6 +2855,7 @@ rows: [
 },
 {
 title: 'RECOVERY MATH',
+help: { title: "What is recovery math?", explanation: "How many winning sequences it takes to recover from a single cap event.", example: "63 wins means: after one cap (a $315 loss), you'd need 63 successful sequences to climb back to breakeven." },
 headline: `${winsToRecover} wins`,
 rows: [
 ['Per cap event', fmtMoney(-expectedWorst, 0), 'neg'],
@@ -2859,6 +2866,7 @@ rows: [
 },
 {
 title: 'EXPOSURE LADDER',
+help: { title: "What is the exposure ladder?", explanation: "The size of each bet as it doubles, and how much total money is on the line by the final step.", example: "$5 → $160 final bet, $315 total exposure — that's 63× leverage off your $5 base bet." },
 headline: fmtMoney(b0 * Math.pow(m, N_max - 1), 0),
 headlineColor: 'gold',
 rows: [
@@ -2870,6 +2878,7 @@ rows: [
 },
 {
 title: 'PROFIT FACTOR',
+help: { title: "What is profit factor?", explanation: "Total dollars won divided by total dollars lost. Above 1.0 = wins outpace losses.", example: "1.05 means for every $1 lost, you earn $1.05 back — barely profitable but positive." },
 headline: profitFactor ? profitFactor.toFixed(2) : '∞',
 headlineColor: profitFactor && profitFactor >= 1 ? 'teal' : 'red',
 rows: [
@@ -2887,7 +2896,7 @@ return (
 <section className="mb-section">
 <div className="mb-section-head">
 <div>
-<h2 className="mb-section-title">What does edge mean?</h2>
+<h2 className="mb-section-title">What does edge mean? <HelpIcon title="What does edge mean?" explanation="A 'benchmark' showing where your current win rate sits on the real-world spectrum from coin flip (50%) to consistent edge (~55%)." example="51% places you in 'marginal edge' territory — profitable but not by much." /></h2>
 <p className="mb-section-sub">Where the current {(p * 100).toFixed(0)}% win probability sits on the real-world benchmark</p>
 </div>
 <div className="mb-section-meta mono mb-meta-hide-sm">
@@ -3111,14 +3120,37 @@ function NumberField({ value, onCommit, defaultValue, min, max, step = 1, intege
   );
 }
 
-// v9.0.2: Structured help popover with title/explanation/example. Single-open across the app
-// (opening one fires a custom event that closes any other open instance). Mobile uses a
-// centered modal-style position with a backdrop instead of an inline tooltip.
+// v9.0.2 / v9.1.1: Structured help popover with title/explanation/example. Single-open across
+// the app (opening one fires a custom event that closes other open instances). Renders the
+// popover into document.body via createPortal so it escapes parent stacking contexts and is
+// never clipped by card/table borders or chart surfaces. Position is computed from the
+// trigger's bounding rect and flips to keep the popover on-screen. Mobile (<560px) uses a
+// fixed centered modal with a backdrop.
+const HELP_POPUP_W = 280;
 function HelpIcon({ title, explanation, example }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const triggerRef = useRef(null);
   const id = useId();
+
+  const computePos = useCallback(() => {
+    if (!triggerRef.current) return;
+    const r = triggerRef.current.getBoundingClientRect();
+    const isMobile = window.innerWidth < 560;
+    if (isMobile) { setPos({ mobile: true }); return; }
+    const w = HELP_POPUP_W;
+    const margin = 8;
+    // Prefer above the trigger; flip below if it would clip off the top
+    let left = r.left + r.width / 2 - w / 2;
+    if (left + w + margin > window.innerWidth) left = window.innerWidth - w - margin;
+    if (left < margin) left = margin;
+    const placeAbove = r.top > 200; // rough heuristic
+    setPos({ left, top: placeAbove ? null : r.bottom + 8, bottom: placeAbove ? (window.innerHeight - r.top + 8) : null });
+  }, []);
+
   useEffect(() => {
     if (!open) return;
+    computePos();
     const onOtherOpen = (e) => { if (e.detail !== id) setOpen(false); };
     const onDocClick = (e) => {
       const t = e.target;
@@ -3126,24 +3158,53 @@ function HelpIcon({ title, explanation, example }) {
       setOpen(false);
     };
     const onEsc = (e) => { if (e.key === 'Escape') setOpen(false); };
+    const onReflow = () => { computePos(); };
     window.addEventListener('mb-help-open', onOtherOpen);
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onEsc);
+    window.addEventListener('resize', onReflow);
+    window.addEventListener('scroll', onReflow, true);
     return () => {
       window.removeEventListener('mb-help-open', onOtherOpen);
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('keydown', onEsc);
+      window.removeEventListener('resize', onReflow);
+      window.removeEventListener('scroll', onReflow, true);
     };
-  }, [open, id]);
+  }, [open, id, computePos]);
+
   const toggle = (e) => {
     e.stopPropagation();
     e.preventDefault();
     if (!open) window.dispatchEvent(new CustomEvent('mb-help-open', { detail: id }));
     setOpen(o => !o);
   };
+
+  const popupStyle = pos && !pos.mobile
+    ? { position: 'fixed', left: `${pos.left}px`, ...(pos.top != null ? { top: `${pos.top}px` } : { bottom: `${pos.bottom}px` }), width: `${HELP_POPUP_W}px` }
+    : undefined;
+
+  const portalContent = open && (
+    <>
+      <span className="mb-help-backdrop" onClick={() => setOpen(false)} />
+      <span
+        className={`mb-help-popup ${pos?.mobile ? 'mb-help-popup-mobile' : ''}`}
+        role="tooltip"
+        style={popupStyle}
+      >
+        <span className="mb-help-popup-title mono">{title}</span>
+        <span className="mb-help-popup-explanation">{explanation}</span>
+        {example && (
+          <span className="mb-help-popup-example">Example: {example}</span>
+        )}
+      </span>
+    </>
+  );
+
   return (
     <span className="mb-help-wrap">
       <button
+        ref={triggerRef}
         type="button"
         className="mb-help-icon"
         onClick={toggle}
@@ -3151,20 +3212,9 @@ function HelpIcon({ title, explanation, example }) {
         aria-label={`Help: ${title}`}
         aria-expanded={open}
       >
-        <HelpCircle size={14} strokeWidth={1.8} />
+        <HelpCircle size={12} strokeWidth={2} />
       </button>
-      {open && (
-        <>
-          <span className="mb-help-backdrop" onClick={() => setOpen(false)} />
-          <span className="mb-help-popup" role="tooltip">
-            <span className="mb-help-popup-title mono">{title}</span>
-            <span className="mb-help-popup-explanation">{explanation}</span>
-            {example && (
-              <span className="mb-help-popup-example">Example: {example}</span>
-            )}
-          </span>
-        </>
-      )}
+      {open && typeof document !== 'undefined' && createPortal(portalContent, document.body)}
     </span>
   );
 }
@@ -3923,7 +3973,7 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
           </div>
           <div className="mb-rec-input-grid">
             <label className="mb-rec-field">
-              <span className="mb-rec-field-label">Total bankroll</span>
+              <span className="mb-rec-field-label">Total bankroll <HelpIcon title="What is total bankroll?" explanation="The full amount of money you're willing to risk on this strategy over its lifetime." example="$50,000 means you could lose all $50k in a worst-case scenario; size your bets accordingly." /></span>
               <input
                 type="number" min={100} max={10_000_000} step={100}
                 value={bankroll}
@@ -3932,7 +3982,7 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
               />
             </label>
             <label className={`mb-rec-field ${budgetWarn ? 'mb-rec-field-warn' : ''}`}>
-              <span className="mb-rec-field-label">Daily allocation budget</span>
+              <span className="mb-rec-field-label">Daily allocation budget <HelpIcon title="What is the daily budget?" explanation="The most you're willing to lose in a single day. Larger budgets let Marti recommend bigger base bets." example="$1,500/day = 3% of $50k bankroll, a common rule-of-thumb starting point." /></span>
               <input
                 type="number" min={10} max={100_000} step={10}
                 value={dailyBudget}
@@ -3953,7 +4003,7 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
               />
             </label>
             <div className="mb-rec-field">
-              <span className="mb-rec-field-label">Markets willing to play</span>
+              <span className="mb-rec-field-label">Markets willing to play <HelpIcon title="Which markets to consider?" explanation="Check which markets Marti can recommend. Unchecked ones are excluded from the search even if they'd otherwise win." example="Uncheck MLB to force a stocks/crypto recommendation only." /></span>
               <div className="mb-rec-checks">
                 {REC_RECOMMEND_MARKETS.map(m => {
                   const mkt = MARKETS.find(x => x.id === m);
@@ -4045,23 +4095,23 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
                   </div>
                   <div className="mb-kpistrip mb-rec-kpis">
                     <div className="mb-kpi mb-kpi-primary">
-                      <div className="mb-kpi-label">Sequences / day</div>
+                      <div className="mb-kpi-label">Sequences / day <HelpIcon title="What is sequences/day?" explanation="How many betting rounds the strategy runs in a typical day at this market's pace." example="48/day means the bot starts about 48 fresh ladders every 24 hours." /></div>
                       <div className="mb-kpi-value mono pos">~{r.seqsPerDay.toFixed(0)}</div>
                     </div>
                     <div className="mb-kpi">
-                      <div className="mb-kpi-label">Cap events / day</div>
+                      <div className="mb-kpi-label">Cap events / day <HelpIcon title="What are cap events/day?" explanation="Expected number of full-ladder losses per day. Green if rare enough to absorb; red if too frequent." example="0.18/day = one cap every ~5 days; 5/day = bot caps multiple times per session." /></div>
                       <div className={`mb-kpi-value mono ${capsPerDayOk ? 'pos' : 'neg'}`}>
                         {r.capsPerDay >= 1 ? r.capsPerDay.toFixed(1) : r.capsPerDay.toFixed(2)}
                       </div>
                     </div>
                     <div className="mb-kpi">
-                      <div className="mb-kpi-label">Days to deplete budget</div>
+                      <div className="mb-kpi-label">Days to deplete budget <HelpIcon title="How long would my budget last?" explanation="At the expected cap frequency and loss size, how many days of caps it would take to chew through your daily budget." example="~33 days = your $1,500 daily budget covers about a month of expected cap pain." /></div>
                       <div className="mb-kpi-value mono">
                         {Number.isFinite(r.daysToDeplete) ? `~${r.daysToDeplete.toFixed(0)}` : '∞'}
                       </div>
                     </div>
                     <div className="mb-kpi">
-                      <div className="mb-kpi-label">Suggested bankroll</div>
+                      <div className="mb-kpi-label">Suggested bankroll <HelpIcon title="What is the suggested bankroll?" explanation="A safety-cushion bankroll: 5× the per-sequence max loss, so a string of 5 caps still leaves you running." example="$1.3k = $255 per-seq loss × 5 — enough to ride out an unlucky run." /></div>
                       <div className="mb-kpi-value mono gold">{fmtBankroll(r.requiredBankroll)}</div>
                     </div>
                   </div>
@@ -4083,7 +4133,7 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
                 {recommendation.alternatives.length > 0 && (
                   <div className="mb-rec-alts">
                     <div className="mb-section-head mb-section-head-tight">
-                      <h3 className="mb-section-title-sm">Top alternatives</h3>
+                      <h3 className="mb-section-title-sm">Top alternatives <HelpIcon title="What are the alternatives?" explanation="The next-best (market, N_max, bet) combinations after the primary recommendation, ranked by your chosen preference." example="If primary is MLB N=4, alternatives might be MLB N=5 (slightly safer) and BTC N=4 (different market, similar return)." /></h3>
                       <span className="mb-section-meta mono">ranked by score</span>
                     </div>
                     <div className="mb-rec-alttable">
@@ -4316,7 +4366,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
       <section className="mb-section">
         <div className="mb-section-head">
           <div>
-            <h2 className="mb-section-title">Streak analysis · {mktLabel}{mkt?.directionLabel ? <> · <span className="mono gold">{mkt.directionLabel}</span></> : null}</h2>
+            <h2 className="mb-section-title">Streak analysis · {mktLabel}{mkt?.directionLabel ? <> · <span className="mono gold">{mkt.directionLabel}</span></> : null} <HelpIcon title="What is streak analysis?" explanation="Looks at how often the market produces long runs of the same outcome (e.g. 5 ups in a row). Long streaks drive the bot's tail risk." example="If the longest streak in the data is 15, your bot needs to survive at least 15 losses in a row." /></h2>
             <p className="mb-section-sub">
               {n.toLocaleString()} outcomes
               {showLimitedSample && (
@@ -4345,25 +4395,25 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
 
         <div className="mb-kpistrip mb-streak-kpis">
           <div className="mb-kpi mb-kpi-primary">
-            <div className="mb-kpi-label">Max streak</div>
+            <div className="mb-kpi-label">Max streak <HelpIcon title="What is max streak?" explanation="The longest run of consecutive same-direction outcomes ever observed in the data." example="Max streak of 15 means at some point, the market produced 15 of the same outcome in a row." /></div>
             <div className="mb-kpi-value mono gold">{max}</div>
           </div>
           <div className="mb-kpi">
-            <div className="mb-kpi-label">Mean</div>
+            <div className="mb-kpi-label">Mean <HelpIcon title="What is the mean streak?" explanation="Average streak length across all runs in the dataset. Usually close to 2 for fair markets." example="Mean of 2.0 means streaks average two outcomes long before flipping direction." /></div>
             <div className="mb-kpi-value mono">{mean.toFixed(2)}</div>
           </div>
           <div className="mb-kpi">
-            <div className="mb-kpi-label">Median</div>
+            <div className="mb-kpi-label">Median <HelpIcon title="What is the median streak?" explanation="The middle streak length: half the streaks are shorter, half are longer. Resistant to outliers." example="Median of 1.0 means half of all streaks are just one outcome before flipping." /></div>
             <div className="mb-kpi-value mono">{median.toFixed(1)}</div>
           </div>
           <div className="mb-kpi">
-            <div className="mb-kpi-label">Total streaks</div>
+            <div className="mb-kpi-label">Total streaks <HelpIcon title="What is total streaks?" explanation="How many separate runs (same-direction sequences) are in the dataset." example="8,000 total streaks in 17,000 outcomes means streaks average about 2 outcomes long." /></div>
             <div className="mb-kpi-value mono">{total.toLocaleString()}</div>
           </div>
         </div>
 
         <div className="mb-streak-divergence">
-          <span className="mono mb-streak-divergence-label">Empirical max vs theoretical</span>
+          <span className="mono mb-streak-divergence-label">Empirical max vs theoretical <HelpIcon title="What is empirical vs theoretical max?" explanation="How the longest streak we actually saw compares to what random-walk math predicts for this market's win rate." example="+5% means observed max is 5% above the predicted max — close enough to call random." /></span>
           <span className={`mono mb-streak-divergence-val ${divergenceAbove ? 'neg' : 'pos'}`}>
             {divergenceAbove ? '+' : ''}{divergencePct.toFixed(1)}%
           </span>
@@ -4377,7 +4427,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
         </div>
 
         <div className="mb-section-head mb-section-head-tight">
-          <h3 className="mb-section-title-sm">Streak length distribution</h3>
+          <h3 className="mb-section-title-sm">Streak length distribution <HelpIcon title="What is the distribution?" explanation="How many streaks of each length appeared in real data, vs how many a random-walk would predict." example="Lots of length-1 streaks, fewer length-2, very few length-6. Shape should look exponential." /></h3>
           <span className="mb-section-meta mono">empirical vs theoretical</span>
         </div>
         <div className="mb-chart-lg">
@@ -4526,7 +4576,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
         </div>
 
         <div className="mb-section-head mb-section-head-tight">
-          <h3 className="mb-section-title-sm">Trade-off: N_max vs (bankroll required, cap frequency)</h3>
+          <h3 className="mb-section-title-sm">Trade-off: N_max vs (bankroll required, cap frequency) <HelpIcon title="What does this trade-off show?" explanation="As N_max grows, per-sequence max loss explodes (gold line, log scale) while cap rate plummets (teal line). Pick N_max where both are acceptable." example="At N_max=6: $315 max loss + 1% cap rate. At N_max=10: $5,115 max loss + 0.02% cap rate." /></h3>
           <span className="mb-section-meta mono">current N_max = {bankrollNMax}</span>
         </div>
         <div className="mb-chart-lg">
@@ -4564,7 +4614,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
         </div>
 
         <div className="mb-section-head mb-section-head-tight mb-risk-head">
-          <h3 className="mb-section-title-sm">Risk Engine: How likely is bankruptcy?</h3>
+          <h3 className="mb-section-title-sm">Risk Engine: How likely is bankruptcy? <HelpIcon title="What is the Risk Engine?" explanation="Estimates your chance of going broke under the current settings, using a Poisson model of cap arrivals over 30 days." example="P(ruin) under 0.01% with the safety gauge in green means you're far from any realistic bankruptcy scenario." /></h3>
           <span className="mb-section-meta mono">Poisson cap arrivals</span>
         </div>
         <div className="mb-risk-controls">
@@ -4594,13 +4644,13 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
             </div>
           </div>
           <div className="mb-kpi">
-            <div className="mb-kpi-label">Expected caps / day</div>
+            <div className="mb-kpi-label">Expected caps / day <HelpIcon title="What are expected caps/day?" explanation="How many cap events to expect on an average day, based on historical cap rate and sequences per day." example="0.24/day ≈ one cap every 4 days at typical pace." /></div>
             <div className="mb-kpi-value mono">
               {riskMetrics.expectedCapsPerDay >= 1 ? riskMetrics.expectedCapsPerDay.toFixed(2) : riskMetrics.expectedCapsPerDay.toFixed(3)}
             </div>
           </div>
           <div className="mb-kpi">
-            <div className="mb-kpi-label">Bankroll covers (cap events)</div>
+            <div className="mb-kpi-label">Bankroll covers (cap events) <HelpIcon title="How many caps does the bankroll cover?" explanation="Total bankroll divided by per-sequence max loss — how many bad sequences you could absorb before going broke." example="Bankroll covers ~31 means you'd need 31 cap events to fully deplete your stake." /></div>
             <div className="mb-kpi-value mono gold">
               ~{riskMetrics.bankrollInCaps.toLocaleString()}
             </div>
@@ -4615,7 +4665,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
           </div>
         </div>
         <div className="mb-risk-horizon">
-          <div className="mb-risk-horizon-head">Expected cap events over time</div>
+          <div className="mb-risk-horizon-head">Expected cap events over time <HelpIcon title="What is the cap forecast?" explanation="Projected cap events across 30, 60, and 90 days. Scales linearly with time at the empirical cap rate." example="If 30 days = 7 caps, then 90 days = 21 caps under the same conditions." /></div>
           <div className="mb-risk-horizon-grid">
             <div className="mb-risk-horizon-cell">
               <div className="mb-risk-horizon-label">30 days</div>
@@ -5909,34 +5959,37 @@ letter-spacing: 0.08em;
   .mb-hint-popup { width: 180px; }
 }
 
-/* v9.0.2: HelpIcon — richer help popover with structured title/explanation/example. */
-.mb-help-wrap { position: relative; display: inline-block; vertical-align: middle; margin-left: 4px; }
+/* v9.0.2 / v9.1.1: HelpIcon — gold-tinted (?) circle, portal-rendered popover. */
+.mb-help-wrap { position: relative; display: inline-block; vertical-align: middle; margin-left: 6px; }
 .mb-help-icon {
   display: inline-flex;
   align-items: center; justify-content: center;
   width: 18px; height: 18px;
   padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  cursor: help;
+  background: rgba(212, 183, 135, 0.12);
+  border: 1px solid rgba(212, 183, 135, 0.4);
+  color: var(--gold-bright);
+  cursor: pointer;
   border-radius: 50%;
-  transition: color 0.15s, background 0.15s;
+  transition: background 120ms ease-out, border-color 120ms ease-out, transform 120ms ease-out;
+  vertical-align: middle;
 }
-.mb-help-icon:hover, .mb-help-icon[aria-expanded="true"] {
-  color: var(--teal-bright);
-  background: rgba(61, 110, 82, 0.10);
+.mb-help-icon:hover {
+  background: rgba(212, 183, 135, 0.22);
+  border-color: rgba(212, 183, 135, 0.7);
+  transform: scale(1.05);
+}
+.mb-help-icon[aria-expanded="true"] {
+  background: rgba(212, 183, 135, 0.3);
+  border-color: var(--gold-bright);
 }
 .mb-help-icon:focus-visible {
-  outline: 2px solid var(--teal);
-  outline-offset: 1px;
+  outline: 2px solid var(--teal-bright);
+  outline-offset: 2px;
 }
 .mb-help-popup {
-  position: absolute;
-  z-index: 200;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
+  position: fixed;
+  z-index: 9999;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -5947,7 +6000,7 @@ letter-spacing: 0.08em;
   padding: 10px 12px;
   width: 280px;
   max-width: 80vw;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
   text-align: left;
   white-space: normal;
   font-weight: 400;
@@ -5981,16 +6034,15 @@ letter-spacing: 0.08em;
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.55);
-    z-index: 150;
+    z-index: 9998;
   }
-  .mb-help-popup {
+  .mb-help-popup-mobile {
     position: fixed;
     top: 50%;
-    bottom: auto;
     left: 50%;
     transform: translate(-50%, -50%);
     width: min(320px, 88vw);
-    z-index: 200;
+    z-index: 9999;
   }
 }
 
