@@ -222,8 +222,9 @@ return { intervals, sequenceBoundaries, longestLossStreak, totalIntervals: inter
 const REAL_CACHE_PREFIX = 'marti_v8_';
 const REAL_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-function realCacheKey(market, startISO, endISO) {
-return `${REAL_CACHE_PREFIX}${market}_${startISO}_${endISO}`;
+function realCacheKey(market, startISO, endISO, direction) {
+// v9 Phase 5: include direction so the MLB cache auto-invalidates when bot direction changes
+return `${REAL_CACHE_PREFIX}${market}_${direction || 'default'}_${startISO}_${endISO}`;
 }
 
 function readRealCache(key) {
@@ -256,7 +257,10 @@ return { startISO: start.toISOString(), endISO: end.toISOString() };
 
 async function fetchRealOutcomes(market, { force = false } = {}) {
 const { startISO, endISO } = defaultRealRange();
-const key = realCacheKey(market, startISO, endISO);
+// v9 Phase 5: derive direction from MARKETS config; bake into cache key + outcome polarity
+const mkt = MARKETS.find(x => x.id === market);
+const direction = mkt ? mkt.direction : null;
+const key = realCacheKey(market, startISO, endISO, direction);
 if (!force) {
 const cached = readRealCache(key);
 if (cached) return { ...cached, cached: true };
@@ -277,9 +281,17 @@ const data = await r.json();
 
 let outcomes;
 if (market === 'btc15' || market === 'spx1h') {
+// direction === 'up' for both — bot wins when close > open
 outcomes = (data.candles || [])
 .filter(c => Number.isFinite(c.o) && Number.isFinite(c.c) && c.c !== c.o)
 .map(c => ({ t: c.t * 1000, win: c.c > c.o ? 1 : 0 }));
+} else if (market === 'mlb') {
+// v9 Phase 5: bot bets the dominant 'no_score' direction → win when runs === 0
+const noScoreIsWin = direction === 'no_score';
+outcomes = (data.events || []).map(e => ({
+  t: e.t * 1000,
+  win: noScoreIsWin ? (e.runs === 0 ? 1 : 0) : (e.runs > 0 ? 1 : 0),
+}));
 } else {
 outcomes = (data.events || []).map(e => ({ t: e.t * 1000, win: e.runs > 0 ? 1 : 0 }));
 }
@@ -399,6 +411,25 @@ for (const o of outcomes) if (o.win === 1) w++;
 return w / outcomes.length;
 }
 
+// v9 Phase 5: bot only caps on LOSS-direction runs (consecutive win===0 outcomes) of length ≥ N_max.
+// Previously cap rate counted both directions, which gave correct numbers when the bot bet the
+// minority side (Phase 3a's MLB at YES-score) but overstated risk once the bot bets the dominant
+// side (Phase 5's MLB at NO-score). This helper counts loss-runs only — the true bot cap rate.
+function countLossRunsAtLeast(outcomes, N_max) {
+  if (!outcomes || outcomes.length === 0 || N_max < 1) return 0;
+  let count = 0, curLen = 0;
+  for (const o of outcomes) {
+    if (o.win === 0) {
+      curLen++;
+    } else {
+      if (curLen >= N_max) count++;
+      curLen = 0;
+    }
+  }
+  if (curLen >= N_max) count++;
+  return count;
+}
+
 // v9 Phase 1: Streak analysis view per Pete's framework
 // Walks a binary outcome sequence (each item {win: 0|1}) and returns all consecutive
 // same-direction run lengths plus distribution stats. Theoretical expected counts use
@@ -444,19 +475,21 @@ function computeStreaks(outcomes) {
   return { runs, distribution, max, mean, median, total: runs.length, winRate: p, n };
 }
 
+// v9 Phase 5: `direction` declares the dominant-outcome side the bot bets on per market.
+// fetchRealOutcomes flips outcomes accordingly so outcome.win === 1 always means "bot wins".
 const MARKETS = [
 { id: 'btc15', label: 'BTC 15m', sub: 'Up / Down', icon: Bitcoin, p: 0.52, mpu: 15, unit: 'bar', continuous: true,
 intervalType: '15min bar', intervalsPerDay: 96, intervalShort: 'bar', intervalLong: '15-minute bar',
-winLabel: 'up', lossLabel: 'down', stepUnit: 'bar' },
+winLabel: 'up', lossLabel: 'down', stepUnit: 'bar', direction: 'up', directionLabel: 'UP' },
 { id: 'spx1h', label: 'SPX 1H', sub: 'Green / Red', icon: BarChart3, p: 0.51, mpu: 60, unit: 'bar', continuous: false, hpd: 6.5, dpw: 5,
 intervalType: 'trading hour', intervalsPerDay: 6, intervalShort: 'hour', intervalLong: 'trading hour',
-winLabel: 'green', lossLabel: 'red', stepUnit: 'hour' },
+winLabel: 'green', lossLabel: 'red', stepUnit: 'hour', direction: 'up', directionLabel: 'UP' },
 { id: 'mlb', label: 'MLB Inning', sub: 'Score / No', icon: Target, p: 0.55, mpu: 22, unit: 'inning', continuous: false, hpd: 3.3, dpw: 6,
 intervalType: 'inning', intervalsPerDay: 9, intervalShort: 'inning', intervalLong: 'inning',
-winLabel: 'score', lossLabel: 'no score', stepUnit: 'inning' },
+winLabel: 'score', lossLabel: 'no score', stepUnit: 'inning', direction: 'no_score', directionLabel: 'NO SCORE' },
 { id: 'custom', label: 'Custom', sub: 'Manual', icon: Settings2, p: 0.50, mpu: 15, unit: 'bar', continuous: true,
 intervalType: 'interval', intervalsPerDay: 24, intervalShort: 'interval', intervalLong: 'interval',
-winLabel: 'win', lossLabel: 'loss', stepUnit: 'interval' }
+winLabel: 'win', lossLabel: 'loss', stepUnit: 'interval', direction: null, directionLabel: null }
 ];
 
 // Data feeds per market (v8: real public APIs proxied via /api)
@@ -726,7 +759,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.0-polish',
+version: 'v9.0-direction',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1013,7 +1046,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.0-polish</span>
+<span className="mb-brand-ver mono">v9.0-direction</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -1127,6 +1160,13 @@ className={`mb-opsbar-mode mb-opsbar-mode-${mo.tone} ${mode === mo.id ? 'mb-opsb
       <span className="mb-opsbar-label">MARKET</span>
       <span className="mb-opsbar-value mono">{mkt?.label || '—'}</span>
     </div>
+
+    {mkt?.directionLabel && (
+      <div className="mb-opsbar-item">
+        <span className="mb-opsbar-label">BET</span>
+        <span className="mb-opsbar-value mono gold">{mkt.directionLabel}</span>
+      </div>
+    )}
 
     <div className="mb-opsbar-item mb-opsbar-hide-md">
       <span className="mb-opsbar-label">INTERVAL</span>
@@ -3048,10 +3088,11 @@ return (
 // Five questions + traffic-light verdict. Purely additive; existing views unchanged.
 // ============================================================
 
+// v9 Phase 5: copy reflects each market's bet direction (set on MARKETS[*].direction)
 const PLAIN_WHAT_IM_DOING = {
-  btc15: "You're using a Martingale strategy on Bitcoin 15-minute price changes. You bet on whether Bitcoin goes up or down each 15 minutes. If you lose, you double your bet next time. If you win, you start over.",
-  spx1h: "You're using a Martingale strategy on S&P 500 hourly direction. You bet on whether the market goes up or down each hour. If you lose, you double your bet next hour.",
-  mlb: "You're betting on whether each MLB inning will have a run scored. If your bet wins, you start over. If it loses, you double your bet next inning.",
+  btc15: "You're using a Martingale strategy on Bitcoin 15-minute price changes. The bot bets on whether Bitcoin goes UP each 15 minutes. If you lose, you double your bet next time. If you win, you start over.",
+  spx1h: "You're using a Martingale strategy on S&P 500 hourly direction. The bot bets on whether the market goes UP each hour. If you lose, you double your bet next hour.",
+  mlb: "You're betting on whether each MLB inning has NO runs scored. (Innings score only ~28% of the time, so 'no score' is the dominant side.) If your bet wins, you start over. If it loses, you double your bet next inning.",
   custom: "You're running a simulation with a custom win probability. This is NOT real market data.",
 };
 
@@ -3074,8 +3115,8 @@ function PlainEnglishCard({ results, outcomes, market, dataInfo, period, isStale
   const whatImDoing = PLAIN_WHAT_IM_DOING[market] || `You're running a Martingale strategy on ${mktLabel}.`;
 
   const stats = computeStreaks(outcomes);
-  const { runs, n } = stats;
-  const capCount = runs.filter(r => r >= N_max).length;
+  const { n } = stats;
+  const capCount = countLossRunsAtLeast(outcomes, N_max);
   const capRate = n > 0 ? capCount / n : 0;
   const perSeqMaxLoss = m === 1 ? b0 * N_max : b0 * (Math.pow(m, N_max) - 1) / (m - 1);
   const finalBetSize = b0 * Math.pow(m, N_max - 1);
@@ -3272,7 +3313,7 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
         : 1;
       const outcomesPerDay = n / totalDays;
       for (const N_max of REC_N_VALUES) {
-        const capCount = runs.filter(r => r >= N_max).length;
+        const capCount = countLossRunsAtLeast(outcomes, N_max);
         const capRate = n > 0 ? capCount / n : 0;
         if (capRate > tolerance) continue;
         const ladderMultiple = (Math.pow(REC_MULTIPLIER, N_max) - 1) / (REC_MULTIPLIER - 1);
@@ -3432,10 +3473,10 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
                     <span className="mono mb-rec-primary-tag">MARTI RECOMMENDS</span>
                   </div>
                   <div className="mb-rec-primary-line mono">
-                    Play <span className="gold">{mktLabel}</span> with base bet <span className="gold">${r.B}</span>, cap at N_max=<span className="gold">{r.N_max}</span>
+                    Play <span className="gold">{mktLabel}</span>{mkt?.directionLabel && <> ({mkt.directionLabel})</>} with base bet <span className="gold">${r.B}</span>, cap at N_max=<span className="gold">{r.N_max}</span>
                   </div>
                   <div className="mb-rec-primary-sub">
-                    Expected: <span className="mono">{fmtCapRate(r.capRate)}</span> cap rate, <span className="mono">{fmtBankroll(r.perSeqMaxLoss)}</span> max single-sequence loss.
+                    Bot bets the <span className="mono">{mkt?.directionLabel || '—'}</span> direction. Expected: <span className="mono">{fmtCapRate(r.capRate)}</span> cap rate, <span className="mono">{fmtBankroll(r.perSeqMaxLoss)}</span> max single-sequence loss.
                   </div>
                   <div className="mb-kpistrip mb-rec-kpis">
                     <div className="mb-kpi mb-kpi-primary">
@@ -3576,7 +3617,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
       ? bankrollBase * bankrollNMax
       : bankrollBase * (Math.pow(bankrollM, bankrollNMax) - 1) / (bankrollM - 1);
     const finalBetAtCap = bankrollBase * Math.pow(bankrollM, bankrollNMax - 1);
-    const capCount = runs.filter(r => r >= bankrollNMax).length;
+    const capCount = countLossRunsAtLeast(outcomes, bankrollNMax);
     const capRate = n > 0 ? capCount / n : 0;
     const seqsBeforeCap = capRate > 0 ? 1 / capRate : Infinity;
 
@@ -3662,7 +3703,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
         ? bankrollBase * nmax
         : bankrollBase * (Math.pow(bankrollM, nmax) - 1) / (bankrollM - 1);
       const seqLossOverflow = !Number.isFinite(seqLoss) || seqLoss > Number.MAX_SAFE_INTEGER;
-      const cnt = runs.filter(r => r >= nmax).length;
+      const cnt = countLossRunsAtLeast(outcomes, nmax);
       const cr = n > 0 ? (cnt / n) * 100 : 0;
       data.push({ nmax, seqLoss: seqLossOverflow ? null : seqLoss, capRate: cr });
     }
@@ -3696,7 +3737,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
       <section className="mb-section">
         <div className="mb-section-head">
           <div>
-            <h2 className="mb-section-title">Streak analysis · {mktLabel}</h2>
+            <h2 className="mb-section-title">Streak analysis · {mktLabel}{mkt?.directionLabel ? <> · <span className="mono gold">{mkt.directionLabel}</span></> : null}</h2>
             <p className="mb-section-sub">
               {n.toLocaleString()} outcomes
               {showLimitedSample && (
@@ -3859,7 +3900,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
                 <div className="mb-kpi-value mono gold">{fmtBankroll(funding.perSeqMaxLoss)}</div>
               </div>
               <div className="mb-kpi">
-                <div className="mb-kpi-label">Expected cap rate <Hint term="Cap rate">Fraction of outcomes that fall inside an empirical streak of length ≥ N_max. A proxy for how often the bot's ladder will get capped.</Hint></div>
+                <div className="mb-kpi-label">Expected cap rate <Hint term="Cap rate">Fraction of outcomes that fall inside a loss-direction streak of length ≥ N_max — i.e. how often the bot's ladder gets capped.</Hint></div>
                 <div className="mb-kpi-value mono">{fmtCapRate(funding.capRate)}</div>
               </div>
               <div className="mb-kpi">
