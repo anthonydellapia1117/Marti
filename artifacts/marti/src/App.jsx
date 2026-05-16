@@ -794,7 +794,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.2.1-skip-btn',
+version: 'v9.2.2-skip-to-expert',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1117,7 +1117,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.2.1-skip-btn</span>
+<span className="mb-brand-ver mono">v9.2.2-skip-to-expert</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -3501,7 +3501,7 @@ function GuidedView({ guidedStep, setGuidedStep, guidedInputs, setGuidedInputs, 
         </div>
         <div className="mb-guided-stepbar-label mono">{stepLabel}</div>
       </div>
-      {guidedStep === 1 && <GuidedScreen1 onNext={() => setGuidedStep(2)} />}
+      {guidedStep === 1 && <GuidedScreen1 onNext={() => setGuidedStep(2)} onSkipToExpert={() => setViewMode('expert')} />}
       {guidedStep === 2 && (
         <GuidedScreen2
           inputs={guidedInputs}
@@ -3537,7 +3537,7 @@ function GuidedView({ guidedStep, setGuidedStep, guidedInputs, setGuidedInputs, 
   );
 }
 
-function GuidedScreen1({ onNext }) {
+function GuidedScreen1({ onNext, onSkipToExpert }) {
   const [open, setOpen] = useState(false);
   // v9.1.3: initialize checkbox from existing localStorage flag so returning users see their saved preference
   const [skipNext, setSkipNext] = useState(() => {
@@ -3551,7 +3551,7 @@ function GuidedScreen1({ onNext }) {
     } catch {}
   };
   const handleNext = () => { persistSkipPref(); onNext(); };
-  const handleSkip = () => { persistSkipPref(); onNext(); };
+  const handleSkip = () => { persistSkipPref(); onSkipToExpert(); };
   return (
     <div className="mb-guided-card mb-guided-anim">
       <h2 className="mb-guided-title">Welcome to Marti</h2>
