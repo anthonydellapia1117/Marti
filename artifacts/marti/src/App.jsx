@@ -759,7 +759,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.0-final',
+version: 'v9.0.1-ruin-filter',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1046,7 +1046,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.0-final</span>
+<span className="mb-brand-ver mono">v9.0.1-ruin-filter</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -3333,6 +3333,13 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
         const daysToDeplete = capsPerDay > 0 && perSeqMaxLoss > 0
           ? dailyBudget / (capsPerDay * perSeqMaxLoss)
           : Infinity;
+        // v9.0.1: hard safety filter — reject any config with >5% chance of bankrupting the user's
+        // bankroll over 30 days, regardless of which preference is selected. Without this, the
+        // "Maximize daily profit" scorer would happily recommend BTC N=4 B=$25 even though it
+        // shows ~100% P(ruin) against a $50k bankroll.
+        const rm = computeRiskMetrics(bankroll, perSeqMaxLoss, capRate, seqsPerDay, 30);
+        if (rm.pRuin > 0.05) continue;
+        const pRuin30 = rm.pRuin;
         // v9 Scoring v2: "max_profit" is the new default — expected daily $ from win-rate × bet vs cap-rate × per-seq loss.
         let score;
         if (preference === 'maximize_seqs') score = seqsPerDay;
@@ -3340,7 +3347,7 @@ function RecommendView({ market, setMarket, currentOutcomes }) {
         else score = seqsPerDay * (winRate * B - capRate * perSeqMaxLoss);
         configs.push({
           market: m, N_max, B, capRate, perSeqMaxLoss, finalBetSize,
-          seqsPerDay, capsPerDay, requiredBankroll, daysToDeplete, score, winRate,
+          seqsPerDay, capsPerDay, requiredBankroll, daysToDeplete, score, winRate, pRuin30,
         });
       }
     }
