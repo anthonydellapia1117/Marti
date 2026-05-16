@@ -7,7 +7,8 @@ import {
 Activity, Layers, BarChart3, Bitcoin, Target, Settings2,
 ChevronRight, Play, Circle, AlertCircle, Hexagon, ArrowUp, ArrowDown,
 MessageSquare, Send, Sparkles, Download, Keyboard, Zap, Flame,
-HelpCircle, DollarSign, TrendingUp, Percent
+HelpCircle, DollarSign, TrendingUp, Percent,
+CheckCircle, AlertTriangle, XCircle, ChevronDown
 } from 'lucide-react';
 
 // ============================================================
@@ -567,6 +568,11 @@ const [concurrent, setConcurrent] = useState(null);
 const [rawOutcomes, setRawOutcomes] = useState(null);
 // v9 Phase 3a: global toggle for the Plain English translation layer
 const [simpleMode, setSimpleMode] = useState(false);
+// v9.1: Guided Mode — new default UX (guided 4-step flow); 'expert' shows the old tab interface
+const [viewMode, setViewMode] = useState('guided');
+const [guidedStep, setGuidedStep] = useState(1);
+const [guidedInputs, setGuidedInputs] = useState({ bankroll: 50000, dailyBudget: 1500, comfort: 'balanced' });
+const [pendingRun, setPendingRun] = useState(false);
 const [runCount, setRunCount] = useState(0);
 const [now, setNow] = useState(new Date());
 const [autoSeed, setAutoSeed] = useState(0);
@@ -759,7 +765,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.0.2-clickable',
+version: 'v9.1-guided',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -818,16 +824,38 @@ window.addEventListener('keydown', handler);
 return () => window.removeEventListener('keydown', handler);
 }, [handleRun]);
 
+// v9.1: Guided Mode → Expert handoff. The "Run a 1-week simulation" CTA in GuidedView
+// sets market/b0/N_max/num/view/viewMode synchronously, then sets pendingRun. By the time
+// this effect re-runs (handleRun dep regenerates with new market/etc.), all state has
+// committed, so handleRun() picks up the right closure.
+useEffect(() => {
+  if (!pendingRun) return;
+  handleRun();
+  setPendingRun(false);
+}, [pendingRun, handleRun]);
+
+const onRunSimulation = useCallback((cfg) => {
+  if (cfg.market) setMarket(cfg.market);
+  if (cfg.B != null) setB0(cfg.B);
+  if (cfg.N_max != null) setNMax(cfg.N_max);
+  if (cfg.num != null) setNum(cfg.num);
+  setView('workspace');
+  setViewMode('expert');
+  setPendingRun(true);
+}, []);
+
 return (
 <div className="mb-root">
 <style>{styles}</style>
-<TopBar now={now} runCount={runCount} running={running} num={num} mode={mode} results={results} simpleMode={simpleMode} setSimpleMode={setSimpleMode} />
-<OperatingStatusBar mode={mode} setMode={setMode} market={market} />
+<TopBar now={now} runCount={runCount} running={running} num={num} mode={mode} results={results} simpleMode={simpleMode} setSimpleMode={setSimpleMode} viewMode={viewMode} setViewMode={setViewMode} setGuidedStep={setGuidedStep} />
+{viewMode === 'expert' && <OperatingStatusBar mode={mode} setMode={setMode} market={market} />}
+{viewMode === 'expert' && (
 <div className="mb-tabs-top">
 <TabSwitch view={view} setView={setView} />
 </div>
+)}
 
-  {market === 'mlb' && dataInfo?.observedWinRate != null && dataInfo.observedWinRate < 0.40 && !isStale && (
+  {viewMode === 'expert' && market === 'mlb' && dataInfo?.observedWinRate != null && dataInfo.observedWinRate < 0.40 && !isStale && (
     <div className="mb-mlbdir-banner">
       <span className="mb-mlbdir-tag mono">MLB DIRECTION</span>
       <span className="mb-mlbdir-msg">
@@ -836,21 +864,33 @@ return (
     </div>
   )}
 
-  <DataBanner
-    dataError={dataError}
-    dataInfo={dataInfo}
-    lowVolume={lowVolume}
-    market={market}
-    onRetry={() => handleRun({ force: true })}
-    running={running}
-    isStale={isStale}
-    justRefreshed={justRefreshed}
-    lastRunAt={lastRunAt}
-    now={now}
-  />
+  {viewMode === 'expert' && (
+    <DataBanner
+      dataError={dataError}
+      dataInfo={dataInfo}
+      lowVolume={lowVolume}
+      market={market}
+      onRetry={() => handleRun({ force: true })}
+      running={running}
+      isStale={isStale}
+      justRefreshed={justRefreshed}
+      lastRunAt={lastRunAt}
+      now={now}
+    />
+  )}
 
   <div className={`mb-stage ${isStale ? 'mb-stage-stale' : ''}`}>
-    {simpleMode && (
+    {viewMode === 'guided' && (
+      <GuidedView
+        guidedStep={guidedStep}
+        setGuidedStep={setGuidedStep}
+        guidedInputs={guidedInputs}
+        setGuidedInputs={setGuidedInputs}
+        setViewMode={setViewMode}
+        onRunSimulation={onRunSimulation}
+      />
+    )}
+    {viewMode === 'expert' && simpleMode && (
       <PlainEnglishCard
         results={results}
         outcomes={rawOutcomes}
@@ -863,7 +903,7 @@ return (
         breakevenP={breakevenP}
       />
     )}
-    {view === 'overview' && (
+    {viewMode === 'expert' && view === 'overview' && (
       <OverviewView
         results={results}
         scenarios={scenarios}
@@ -880,7 +920,7 @@ return (
         intervalData={intervalData}
       />
     )}
-    {view === 'workspace' && (
+    {viewMode === 'expert' && view === 'workspace' && (
       <WorkspaceView
         results={results}
         running={running}
@@ -902,7 +942,7 @@ return (
         exportState={exportState}
       />
     )}
-    {view === 'insights' && (
+    {viewMode === 'expert' && view === 'insights' && (
       <InsightsView
         results={results}
         scenarios={scenarios}
@@ -918,7 +958,7 @@ return (
         intervalData={intervalData}
       />
     )}
-    {view === 'streaks' && (
+    {viewMode === 'expert' && view === 'streaks' && (
       <StreaksView
         outcomes={rawOutcomes}
         market={market}
@@ -926,14 +966,14 @@ return (
         isStale={isStale}
       />
     )}
-    {view === 'recommend' && (
+    {viewMode === 'expert' && view === 'recommend' && (
       <RecommendView
         market={market}
         setMarket={setMarket}
         currentOutcomes={rawOutcomes}
       />
     )}
-    {view === 'askmarty' && (
+    {viewMode === 'expert' && view === 'askmarty' && (
       <AskMartyView
         results={results}
         period={period}
@@ -950,7 +990,7 @@ return (
     )}
   </div>
 
-  <BottomNav view={view} setView={setView} />
+  {viewMode === 'expert' && <BottomNav view={view} setView={setView} />}
   <footer className="mb-disclaimer">
     Marti is a strategy simulation tool. Results reflect historical market data and do not predict future performance.
     Not investment advice. Real prediction market trading involves costs (slippage, fees, non-parity pricing) not modeled here.
@@ -1040,13 +1080,13 @@ title="Sample size below 1,000 outcomes. Observed win rate may regress toward 50
 return null;
 }
 
-function TopBar({ now, runCount, running, num, mode, results, simpleMode, setSimpleMode }) {
+function TopBar({ now, runCount, running, num, mode, results, simpleMode, setSimpleMode, viewMode, setViewMode, setGuidedStep }) {
 const currentMode = MODES.find(x => x.id === mode);
 return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.0.2-clickable</span>
+<span className="mb-brand-ver mono">v9.1-guided</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -1058,6 +1098,21 @@ return (
 <span className="mb-meta-sep">·</span>
 <span>{(num / 1000).toFixed(0)}k seq</span>
 </div>
+<button
+  type="button"
+  onClick={() => {
+    setViewMode(v => {
+      const next = v === 'guided' ? 'expert' : 'guided';
+      if (next === 'guided') setGuidedStep(1);
+      return next;
+    });
+  }}
+  className={`mb-plain-toggle ${viewMode === 'guided' ? 'mb-plain-toggle-on' : 'mb-plain-toggle-off'}`}
+  aria-pressed={viewMode === 'guided'}
+  title="Toggle Guided / Expert mode"
+>
+  {viewMode === 'guided' ? 'Guided' : 'Expert'}
+</button>
 <button
   type="button"
   onClick={() => setSimpleMode(s => !s)}
@@ -3307,6 +3362,435 @@ function snapBet(maxB) {
   let best = 1;
   for (const s of REC_BET_SNAPS) if (s <= maxB) best = s;
   return best;
+}
+
+// ============================================================
+// GUIDED VIEW (v9.1) — 4-screen first-run flow
+// Screen 1: Welcome + how-it-works
+// Screen 2: Three inputs (bankroll, daily budget, comfort)
+// Screen 3: The Answer — verdict + plan + stats
+// Screen 4: What's next — three action cards
+// ============================================================
+
+const COMFORT_TO_PREF = {
+  most_careful: 'minimize_caps',
+  balanced: 'max_profit',
+  aggressive: 'maximize_seqs',
+};
+const COMFORT_LABEL = {
+  most_careful: 'Most careful',
+  balanced: 'Balanced',
+  aggressive: 'Aggressive',
+};
+
+function formatCurrency(n) {
+  return `$${Math.round(n).toLocaleString()}`;
+}
+
+function GuidedView({ guidedStep, setGuidedStep, guidedInputs, setGuidedInputs, setViewMode, onRunSimulation }) {
+  return (
+    <div className="mb-guided">
+      <div className="mb-guided-stepbar">
+        <div className="mb-guided-stepbar-track">
+          {[1, 2, 3, 4].map(s => (
+            <div key={s} className={`mb-guided-stepbar-cell ${s <= guidedStep ? 'mb-guided-stepbar-cell-active' : ''}`} />
+          ))}
+        </div>
+        <div className="mb-guided-stepbar-label mono">STEP {guidedStep} OF 4</div>
+      </div>
+      {guidedStep === 1 && <GuidedScreen1 onNext={() => setGuidedStep(2)} />}
+      {guidedStep === 2 && (
+        <GuidedScreen2
+          inputs={guidedInputs}
+          setInputs={setGuidedInputs}
+          onBack={() => setGuidedStep(1)}
+          onNext={() => setGuidedStep(3)}
+        />
+      )}
+      {guidedStep === 3 && (
+        <GuidedScreen3
+          inputs={guidedInputs}
+          onBack={() => setGuidedStep(2)}
+          onNext={() => setGuidedStep(4)}
+        />
+      )}
+      {guidedStep === 4 && (
+        <GuidedScreen4
+          inputs={guidedInputs}
+          onRunSimulation={onRunSimulation}
+          onGoExpert={() => setViewMode('expert')}
+          onRestart={() => { setGuidedStep(2); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function GuidedScreen1({ onNext }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-guided-card mb-guided-anim">
+      <h2 className="mb-guided-title">Welcome to Marti</h2>
+      <p className="mb-guided-sub">Marti tests a betting strategy against real market data. Tell us your situation. We'll tell you if this strategy would work for you.</p>
+      <button
+        type="button"
+        className="mb-guided-disclosure"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+      >
+        How does this strategy work? <ChevronDown size={14} style={{ transform: open ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.15s' }} />
+      </button>
+      {open && (
+        <div className="mb-guided-disclosure-body">
+          <p>Marti uses a "doubling-bet" strategy called <strong>martingale</strong>. You bet a small amount. If you lose, you double your bet next time. Keep doubling until you win — then you recover all losses plus your starting bet. The risk: if you keep losing too many times in a row, the bets get huge fast. Marti tests this strategy against real market data (Bitcoin, MLB, stocks) to see if it would actually work for your bankroll.</p>
+          <div className="mb-guided-ladder">
+            {[
+              { v: '$5', tone: 'gold' },
+              { v: '$10', tone: 'dim' },
+              { v: '$20', tone: 'dim' },
+              { v: '$40', tone: 'dim' },
+              { v: '$80', tone: 'dim' },
+              { v: '$160', tone: 'red' },
+            ].map((b, i) => (
+              <React.Fragment key={i}>
+                <span className={`mb-guided-ladder-cell mb-guided-ladder-${b.tone} mono`}>{b.v}</span>
+                {i < 5 && <span className="mb-guided-ladder-arrow">→</span>}
+              </React.Fragment>
+            ))}
+          </div>
+          <p className="mb-guided-ladder-cap mono dim">starts at $5 · caps at $160 after 6 losses</p>
+        </div>
+      )}
+      <div className="mb-guided-actions">
+        <span />
+        <button type="button" className="mb-guided-btn-primary" onClick={onNext}>Let's go →</button>
+      </div>
+    </div>
+  );
+}
+
+function GuidedScreen2({ inputs, setInputs, onBack, onNext }) {
+  const { bankroll, dailyBudget, comfort } = inputs;
+  let error = null;
+  if (bankroll < 100) error = 'Bankroll too small to be meaningful.';
+  else if (dailyBudget < 10) error = 'Daily budget too small for any viable strategy.';
+  else if (dailyBudget > bankroll) error = "Daily budget can't exceed your total bankroll.";
+
+  return (
+    <div className="mb-guided-card mb-guided-anim">
+      <h2 className="mb-guided-title">Your situation</h2>
+      <p className="mb-guided-sub">We need three pieces of information from you.</p>
+
+      <div className="mb-guided-field">
+        <label className="mb-guided-field-label">
+          How much money would you put aside for this?
+          <HelpIcon title="What if I don't know?" explanation="Use the amount you'd be willing to risk losing entirely. If unsure, start with $5,000–$10,000." example="$50,000 is a typical middle-ground for serious testing." />
+        </label>
+        <p className="mb-guided-field-sub">Your total bankroll — what you'd risk on this strategy over time, not what you'd bet each day.</p>
+        <input
+          type="number" min={100} max={10_000_000} step={100}
+          value={bankroll}
+          onChange={e => setInputs(prev => ({ ...prev, bankroll: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
+          className="mb-guided-input mono"
+        />
+        <span className="mb-guided-field-fmt mono dim">{formatCurrency(bankroll)}</span>
+      </div>
+
+      <div className="mb-guided-field">
+        <label className="mb-guided-field-label">
+          How much are you OK losing per day at the worst?
+          <HelpIcon title="What's a good daily budget?" explanation="Common rule: 1–3% of total bankroll per day. With $50k bankroll, that's $500–$1,500." example="$1,500/day is the default — allows meaningful action without rapid bankroll depletion." />
+        </label>
+        <p className="mb-guided-field-sub">Your daily allocation. Bigger means bigger potential wins but bigger swings.</p>
+        <input
+          type="number" min={10} max={100_000} step={10}
+          value={dailyBudget}
+          onChange={e => setInputs(prev => ({ ...prev, dailyBudget: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
+          className="mb-guided-input mono"
+        />
+        <span className="mb-guided-field-fmt mono dim">{formatCurrency(dailyBudget)}</span>
+      </div>
+
+      <div className="mb-guided-field">
+        <label className="mb-guided-field-label">How careful do you want to be?</label>
+        <p className="mb-guided-field-sub">Pick the trade-off between bigger wins and lower risk.</p>
+        <div className="mb-guided-comfort-grid">
+          {[
+            { id: 'most_careful', label: 'Most careful', sub: 'Small wins, tiny risk of big losses' },
+            { id: 'balanced', label: 'Balanced', sub: 'Medium wins, low risk — good default' },
+            { id: 'aggressive', label: 'Aggressive', sub: 'Bigger wins, more risk of bad days' },
+          ].map(opt => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => setInputs(prev => ({ ...prev, comfort: opt.id }))}
+              className={`mb-guided-comfort-card ${comfort === opt.id ? 'mb-guided-comfort-card-active' : ''}`}
+              aria-pressed={comfort === opt.id}
+            >
+              <span className="mb-guided-comfort-label">{opt.label}</span>
+              <span className="mb-guided-comfort-sub">{opt.sub}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && <div className="mb-guided-error">{error}</div>}
+
+      <div className="mb-guided-actions">
+        <button type="button" className="mb-guided-btn-secondary" onClick={onBack}>← Back</button>
+        <button type="button" className="mb-guided-btn-primary" onClick={onNext} disabled={!!error}>Calculate →</button>
+      </div>
+    </div>
+  );
+}
+
+function GuidedScreen3({ inputs, onBack, onNext }) {
+  const { bankroll, dailyBudget, comfort } = inputs;
+  const preference = COMFORT_TO_PREF[comfort] || 'max_profit';
+  const [outcomesByMarket, setOutcomesByMarket] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    Promise.all(REC_RECOMMEND_MARKETS.map(m => fetchRealOutcomes(m).then(p => [m, p]).catch(err => [m, { error: err.message || String(err) }])))
+      .then(entries => {
+        if (cancelled) return;
+        const next = {};
+        let firstErr = null;
+        for (const [m, payload] of entries) {
+          if (payload && payload.error) firstErr = firstErr || payload.error;
+          else next[m] = payload;
+        }
+        setOutcomesByMarket(next);
+        if (Object.keys(next).length === 0 && firstErr) setError(firstErr);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const recommendation = useMemo(() => {
+    if (loading) return { kind: 'loading' };
+    if (Object.keys(outcomesByMarket).length === 0) return { kind: 'no_data', error };
+    const tolerance = 0.05;
+    const configs = [];
+    for (const m of REC_RECOMMEND_MARKETS) {
+      const payload = outcomesByMarket[m];
+      if (!payload || !payload.outcomes) continue;
+      const outcomes = payload.outcomes;
+      const stats = computeStreaks(outcomes);
+      const { n, winRate } = stats;
+      const totalDays = payload.start && payload.end
+        ? Math.max(1, (new Date(payload.end) - new Date(payload.start)) / 86400000)
+        : 1;
+      const outcomesPerDay = n / totalDays;
+      for (const N_max of REC_N_VALUES) {
+        const capCount = countLossRunsAtLeast(outcomes, N_max);
+        const capRate = n > 0 ? capCount / n : 0;
+        if (capRate > tolerance) continue;
+        const ladder = (Math.pow(REC_MULTIPLIER, N_max) - 1) / (REC_MULTIPLIER - 1);
+        const maxB = (dailyBudget / 3) / ladder;
+        if (maxB < 1) continue;
+        const B = snapBet(maxB);
+        const perSeqMaxLoss = B * ladder;
+        const avgSeqLen = winRate > 0 ? Math.min(1 / winRate, N_max) : N_max;
+        const seqsPerDay = outcomesPerDay / avgSeqLen;
+        const capsPerDay = capCount / totalDays;
+        const rm = computeRiskMetrics(bankroll, perSeqMaxLoss, capRate, seqsPerDay, 30);
+        if (rm.pRuin > 0.05) continue;
+        const expectedDailyProfit = seqsPerDay * (winRate * B - capRate * perSeqMaxLoss);
+        let score;
+        if (preference === 'maximize_seqs') score = seqsPerDay;
+        else if (preference === 'minimize_caps') score = (1 - capRate) * 1000;
+        else score = expectedDailyProfit;
+        const daysToDeplete = capsPerDay > 0 && perSeqMaxLoss > 0
+          ? dailyBudget / (capsPerDay * perSeqMaxLoss)
+          : Infinity;
+        configs.push({ market: m, N_max, B, capRate, perSeqMaxLoss, seqsPerDay, capsPerDay, pRuin: rm.pRuin, expectedDailyProfit, daysToDeplete, score, winRate });
+      }
+    }
+    if (configs.length === 0) return { kind: 'none_viable' };
+    configs.sort((a, b) => b.score - a.score);
+    return { kind: 'ok', primary: configs[0] };
+  }, [outcomesByMarket, loading, bankroll, dailyBudget, preference, error]);
+
+  let verdict = null;
+  if (recommendation.kind === 'ok') {
+    const p = recommendation.primary;
+    if (p.pRuin < 0.01 && p.expectedDailyProfit > 0) verdict = { tone: 'green', label: 'GOOD TO GO', Icon: CheckCircle };
+    else if (p.expectedDailyProfit > 0) verdict = { tone: 'yellow', label: 'RISKY', Icon: AlertTriangle };
+    else verdict = { tone: 'red', label: 'BAD BET', Icon: XCircle };
+  } else if (recommendation.kind === 'none_viable' || recommendation.kind === 'no_data') {
+    verdict = { tone: 'red', label: 'NO SAFE PLAY', Icon: XCircle };
+  }
+
+  return (
+    <div className="mb-guided-card mb-guided-anim">
+      <h2 className="mb-guided-title">The answer</h2>
+
+      {recommendation.kind === 'loading' && (
+        <div className="mb-guided-loading mono">Loading market data…</div>
+      )}
+
+      {verdict && (
+        <div className={`mb-guided-verdict mb-guided-verdict-${verdict.tone}`}>
+          <verdict.Icon size={28} strokeWidth={2} />
+          <span className="mb-guided-verdict-label mono">{verdict.label}</span>
+        </div>
+      )}
+
+      {recommendation.kind === 'ok' && (() => {
+        const p = recommendation.primary;
+        const mkt = MARKETS.find(x => x.id === p.market);
+        const mktLabel = mkt ? mkt.label : p.market;
+        const dirLabel = mkt?.directionLabel ? ` (${mkt.directionLabel})` : '';
+        const daily = p.expectedDailyProfit;
+        return (
+          <>
+            <div className="mb-guided-plan">
+              <div className="mb-guided-plan-label">THE PLAN</div>
+              <div className="mb-guided-plan-line">
+                Bet on <strong>{mktLabel}{dirLabel}</strong>, <span className="mono gold">${p.B}</span> per round. Stop after <span className="mono gold">{p.N_max}</span> doubles.
+              </div>
+              <div className="mb-guided-plan-sub mono dim">({fmtBankroll(p.perSeqMaxLoss)} max loss per round)</div>
+            </div>
+
+            <div className="mb-guided-stats">
+              <div className="mb-guided-stat">
+                <div className="mb-guided-stat-label">Expected daily return</div>
+                <div className={`mb-guided-stat-value mono ${daily >= 0 ? 'pos' : 'neg'}`}>{daily >= 0 ? '+' : ''}{fmtMoney(daily)}</div>
+              </div>
+              <div className="mb-guided-stat">
+                <div className="mb-guided-stat-label">Worst possible day</div>
+                <div className="mb-guided-stat-value mono neg">-{formatCurrency(dailyBudget)}</div>
+              </div>
+              <div className="mb-guided-stat">
+                <div className="mb-guided-stat-label">Bankroll lasts (worst case)</div>
+                <div className="mb-guided-stat-value mono gold">~{Number.isFinite(p.daysToDeplete) ? Math.round(p.daysToDeplete).toLocaleString() : '∞'} days</div>
+              </div>
+              <div className="mb-guided-stat">
+                <div className="mb-guided-stat-label">Chance you go broke (30d)</div>
+                <div className="mb-guided-stat-value mono pos">{fmtCapRate(p.pRuin)}</div>
+              </div>
+            </div>
+          </>
+        );
+      })()}
+
+      {(recommendation.kind === 'none_viable' || recommendation.kind === 'no_data') && (
+        <>
+          <div className="mb-guided-plan">
+            <div className="mb-guided-plan-label">WHAT HAPPENED</div>
+            <div className="mb-guided-plan-line"><strong>No safe strategy fits your inputs.</strong></div>
+            <div className="mb-guided-plan-sub">
+              {recommendation.kind === 'no_data'
+                ? 'Could not load market data. Try again in a moment.'
+                : 'Your daily budget is too small relative to your bankroll, or your bankroll is too small for any market we test. Try increasing your daily budget or your bankroll.'}
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="mb-guided-actions">
+        <button type="button" className="mb-guided-btn-secondary" onClick={onBack}>← Adjust</button>
+        <button type="button" className="mb-guided-btn-primary" onClick={onNext} disabled={recommendation.kind !== 'ok'}>I'm interested →</button>
+      </div>
+    </div>
+  );
+}
+
+function GuidedScreen4({ inputs, onRunSimulation, onGoExpert, onRestart }) {
+  // Re-derive the primary so the "Run a 1-week sim" CTA can wire the right config
+  const { bankroll, dailyBudget, comfort } = inputs;
+  const preference = COMFORT_TO_PREF[comfort] || 'max_profit';
+  const [outcomesByMarket, setOutcomesByMarket] = useState({});
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(REC_RECOMMEND_MARKETS.map(m => fetchRealOutcomes(m).then(p => [m, p]).catch(() => [m, null])))
+      .then(entries => {
+        if (cancelled) return;
+        const next = {};
+        for (const [m, payload] of entries) if (payload) next[m] = payload;
+        setOutcomesByMarket(next);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+  const primary = useMemo(() => {
+    if (loading || Object.keys(outcomesByMarket).length === 0) return null;
+    const tolerance = 0.05;
+    const configs = [];
+    for (const m of REC_RECOMMEND_MARKETS) {
+      const payload = outcomesByMarket[m]; if (!payload?.outcomes) continue;
+      const outcomes = payload.outcomes;
+      const stats = computeStreaks(outcomes);
+      const { n, winRate } = stats;
+      const totalDays = payload.start && payload.end
+        ? Math.max(1, (new Date(payload.end) - new Date(payload.start)) / 86400000)
+        : 1;
+      const outcomesPerDay = n / totalDays;
+      for (const N_max of REC_N_VALUES) {
+        const capCount = countLossRunsAtLeast(outcomes, N_max);
+        const capRate = n > 0 ? capCount / n : 0;
+        if (capRate > tolerance) continue;
+        const ladder = (Math.pow(REC_MULTIPLIER, N_max) - 1) / (REC_MULTIPLIER - 1);
+        const maxB = (dailyBudget / 3) / ladder;
+        if (maxB < 1) continue;
+        const B = snapBet(maxB);
+        const perSeqMaxLoss = B * ladder;
+        const avgSeqLen = winRate > 0 ? Math.min(1 / winRate, N_max) : N_max;
+        const seqsPerDay = outcomesPerDay / avgSeqLen;
+        const rm = computeRiskMetrics(bankroll, perSeqMaxLoss, capRate, seqsPerDay, 30);
+        if (rm.pRuin > 0.05) continue;
+        let score;
+        if (preference === 'maximize_seqs') score = seqsPerDay;
+        else if (preference === 'minimize_caps') score = (1 - capRate) * 1000;
+        else score = seqsPerDay * (winRate * B - capRate * perSeqMaxLoss);
+        configs.push({ market: m, N_max, B, score });
+      }
+    }
+    if (configs.length === 0) return null;
+    configs.sort((a, b) => b.score - a.score);
+    return configs[0];
+  }, [outcomesByMarket, loading, bankroll, dailyBudget, preference]);
+
+  return (
+    <div className="mb-guided-card mb-guided-anim">
+      <h2 className="mb-guided-title">Smart next step</h2>
+      <p className="mb-guided-sub">Don't risk real money yet. Try this on paper first.</p>
+
+      <div className="mb-guided-next-cards">
+        <button
+          type="button"
+          className="mb-guided-next-card"
+          onClick={() => primary && onRunSimulation({ market: primary.market, B: primary.B, N_max: primary.N_max, num: 10000 })}
+          disabled={!primary}
+        >
+          <span className="mb-guided-next-card-title">Run a 1-week simulation</span>
+          <span className="mb-guided-next-card-sub">See what this would have done over recent real market data.</span>
+        </button>
+        <button
+          type="button"
+          className="mb-guided-next-card"
+          onClick={onGoExpert}
+        >
+          <span className="mb-guided-next-card-title">See the full math (Expert Mode)</span>
+          <span className="mb-guided-next-card-sub">All the analysis: streak distribution, risk engine, trade-off curves.</span>
+        </button>
+        <button
+          type="button"
+          className="mb-guided-next-card"
+          onClick={onRestart}
+        >
+          <span className="mb-guided-next-card-title">Start over with different numbers</span>
+          <span className="mb-guided-next-card-sub">Adjust your bankroll, budget, or comfort level.</span>
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function RecommendView({ market, setMarket, currentOutcomes }) {
@@ -5721,6 +6205,291 @@ letter-spacing: 0.08em;
   font-size: var(--fs-xs);
   color: var(--red-bright);
   padding: 4px 0;
+}
+
+/* v9.1: Guided Mode */
+.mb-guided {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--sp-lg) var(--sp-md);
+}
+.mb-guided-stepbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-md);
+  margin-bottom: var(--sp-lg);
+}
+.mb-guided-stepbar-track {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.mb-guided-stepbar-cell {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  transition: background 0.2s;
+}
+.mb-guided-stepbar-cell-active { background: var(--teal); }
+.mb-guided-stepbar-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+.mb-guided-card {
+  background: var(--s1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--sp-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-md);
+}
+.mb-guided-anim {
+  animation: mb-guided-fadein 0.22s ease-out;
+}
+@keyframes mb-guided-fadein {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.mb-guided-title {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.mb-guided-sub {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  color: var(--muted);
+}
+.mb-guided-disclosure {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 6px 10px;
+  color: var(--teal-bright);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  display: flex; align-items: center; gap: 6px;
+}
+.mb-guided-disclosure:hover { background: rgba(61, 110, 82, 0.08); }
+.mb-guided-disclosure-body {
+  padding: var(--sp-sm) 0;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text);
+}
+.mb-guided-disclosure-body p { margin: 0 0 var(--sp-sm); }
+.mb-guided-ladder {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--sp-sm);
+}
+.mb-guided-ladder-cell {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  background: var(--s2);
+}
+.mb-guided-ladder-gold { color: var(--gold); border-color: var(--gold); }
+.mb-guided-ladder-dim { color: var(--muted); }
+.mb-guided-ladder-red { color: var(--red-bright); border-color: var(--red); }
+.mb-guided-ladder-arrow { color: var(--dim); font-size: var(--fs-sm); }
+.mb-guided-ladder-cap { margin: 6px 0 0; font-size: var(--fs-xs); }
+
+.mb-guided-field {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: var(--sp-sm) 0;
+  border-top: 1px solid var(--border);
+}
+.mb-guided-field:first-of-type { border-top: 0; padding-top: 0; }
+.mb-guided-field-label {
+  font-size: var(--fs-md);
+  color: var(--text);
+  font-weight: 500;
+  display: flex; align-items: center; gap: 6px;
+}
+.mb-guided-field-sub {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.mb-guided-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: var(--fs-lg);
+  width: 100%;
+  max-width: 240px;
+  margin-top: 4px;
+}
+.mb-guided-input:focus {
+  outline: none;
+  border-color: var(--teal);
+}
+.mb-guided-field-fmt { font-size: var(--fs-xs); margin-top: 2px; }
+.mb-guided-comfort-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-sm);
+  margin-top: var(--sp-xs);
+}
+@media (max-width: 560px) {
+  .mb-guided-comfort-grid { grid-template-columns: 1fr; }
+}
+.mb-guided-comfort-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: var(--sp-sm) var(--sp-md);
+  cursor: pointer;
+  font-family: inherit;
+  display: flex; flex-direction: column; gap: 4px;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
+}
+.mb-guided-comfort-card:hover { border-color: rgba(61, 110, 82, 0.5); transform: translateY(-1px); }
+.mb-guided-comfort-card-active {
+  border-color: var(--teal);
+  background: rgba(61, 110, 82, 0.10);
+}
+.mb-guided-comfort-label { font-size: var(--fs-md); color: var(--text); font-weight: 600; }
+.mb-guided-comfort-sub { font-size: var(--fs-xs); color: var(--muted); }
+
+.mb-guided-error {
+  padding: 8px 12px;
+  border: 1px solid var(--red);
+  border-left: 3px solid var(--red);
+  background: rgba(196, 69, 69, 0.10);
+  border-radius: 3px;
+  color: var(--red-bright);
+  font-size: var(--fs-sm);
+}
+
+.mb-guided-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-md);
+  margin-top: var(--sp-md);
+}
+.mb-guided-btn-primary {
+  padding: 10px 18px;
+  border: 1px solid var(--gold-bright);
+  border-radius: 4px;
+  background: var(--gold);
+  color: var(--bg);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.12s;
+}
+.mb-guided-btn-primary:hover:not(:disabled) { background: var(--gold-bright); transform: translateY(-1px); }
+.mb-guided-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.mb-guided-btn-secondary {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.mb-guided-btn-secondary:hover { color: var(--text); border-color: var(--teal); }
+
+.mb-guided-loading { padding: var(--sp-md); color: var(--muted); text-align: center; }
+
+.mb-guided-verdict {
+  display: flex; align-items: center; gap: var(--sp-md);
+  padding: var(--sp-md);
+  border: 2px solid;
+  border-radius: 6px;
+  font-weight: 700;
+}
+.mb-guided-verdict-label { font-size: var(--fs-xl); letter-spacing: 0.04em; }
+.mb-guided-verdict-green { background: rgba(61, 110, 82, 0.18); border-color: var(--teal-bright); color: var(--teal-bright); }
+.mb-guided-verdict-yellow { background: rgba(212, 183, 135, 0.18); border-color: var(--gold-bright); color: var(--gold-bright); }
+.mb-guided-verdict-red { background: rgba(196, 69, 69, 0.18); border-color: var(--red-bright); color: var(--red-bright); }
+
+.mb-guided-plan {
+  padding: var(--sp-md);
+  background: var(--s2);
+  border-radius: 4px;
+  border-left: 3px solid var(--gold);
+}
+.mb-guided-plan-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+.mb-guided-plan-line { font-size: var(--fs-md); line-height: 1.5; color: var(--text); }
+.mb-guided-plan-sub { font-size: var(--fs-xs); margin-top: 4px; }
+
+.mb-guided-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+@media (max-width: 480px) { .mb-guided-stats { grid-template-columns: 1fr; } }
+.mb-guided-stat {
+  background: var(--s2);
+  padding: var(--sp-sm) var(--sp-md);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.mb-guided-stat-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.mb-guided-stat-value { font-size: var(--fs-lg); font-weight: 600; }
+
+.mb-guided-next-cards {
+  display: flex; flex-direction: column;
+  gap: var(--sp-sm);
+  margin-top: var(--sp-sm);
+}
+.mb-guided-next-card {
+  display: flex; flex-direction: column; gap: 4px;
+  text-align: left;
+  background: var(--s2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: var(--sp-md);
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
+}
+.mb-guided-next-card:hover:not(:disabled) { border-color: var(--gold); background: rgba(199, 162, 107, 0.06); transform: translateY(-1px); }
+.mb-guided-next-card:disabled { opacity: 0.5; cursor: not-allowed; }
+.mb-guided-next-card-title { font-size: var(--fs-md); color: var(--text); font-weight: 600; }
+.mb-guided-next-card-sub { font-size: var(--fs-sm); color: var(--muted); }
+
+@media (max-width: 560px) {
+  .mb-guided { padding: var(--sp-md) var(--sp-sm); }
+  .mb-guided-card { padding: var(--sp-md); }
+  .mb-guided-actions { flex-direction: column-reverse; align-items: stretch; }
+  .mb-guided-actions > button { width: 100%; }
 }
 
 /* v8.2: Disclaimer footer */
