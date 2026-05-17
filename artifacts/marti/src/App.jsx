@@ -543,7 +543,7 @@ const EDGE_BENCHMARKS = [
 ];
 
 function classifyEdge(p) {
-if (p < 0.50) return { label: 'Negative', tone: 'red', desc: 'You lose more than you win. Martingale guarantees ruin.' };
+if (p < 0.50) return { label: 'Negative', tone: 'red', desc: 'You lose more than you win. Doubling-based cost averaging cannot recover from sub-coin-flip odds.' };
 if (p < 0.51) return { label: 'Coin flip', tone: 'dim', desc: 'No real edge. Cap events will dominate over time.' };
 if (p < 0.53) return { label: 'Thin edge', tone: 'gold', desc: 'On par with casinos. Survivable but tight.' };
 if (p < 0.55) return { label: 'Sharp', tone: 'teal', desc: 'Where pro sports bettors operate. Realistic ceiling.' };
@@ -794,7 +794,7 @@ setMarket(preset.market);
 // Export current state as JSON
 const exportState = useCallback(() => {
 const blob = {
-version: 'v9.3-working-capital',
+version: 'v9.4-cost-averaging',
 timestamp: new Date().toISOString(),
 mode,
 market,
@@ -1117,7 +1117,7 @@ return (
 <header className="mb-topbar">
 <div className="mb-brand">
 <img src={LOGO_DATA_URI} alt="Marti" className="mb-brand-logo" />
-<span className="mb-brand-ver mono">v9.3-working-capital</span>
+<span className="mb-brand-ver mono">v9.4-cost-averaging</span>
 </div>
 <div className="mb-topbar-right">
 <div className={`mb-status ${running ? 'mb-status-run' : ''}`}>
@@ -1338,7 +1338,7 @@ return (
     </p>
 
     <p className="mb-msays-p">
-      Each martingale step = one <strong>{mkt?.intervalLong}</strong>. This run replays{' '}
+      Each doubling step = one <strong>{mkt?.intervalLong}</strong>. This run replays{' '}
       <strong className="mono">{(results.realNum || num).toLocaleString()}</strong> sequences built from real outcomes between{' '}
       <strong className="mono">{fmtDateShort(period.startDate)}</strong> and{' '}
       <strong className="mono">{fmtDateShort(period.endDate)}</strong>{' '}
@@ -1577,7 +1577,7 @@ return (
 <div>
 <h2 className="mb-section-title">Sequence Timeline <HelpIcon title="What is the sequence timeline?" explanation="Every individual sequence in time order, with its P&L. Lets you spot streaks of wins or clusters of caps." example="A row of green sequences followed by one red cap shows the strategy's typical rhythm." /></h2>
 <p className="mb-section-sub">
-Each martingale step maps to one <strong className="mono">{mkt.intervalLong}</strong>.
+Each doubling step maps to one <strong className="mono">{mkt.intervalLong}</strong>.
 A worst-case chain of <strong className="mono">{N_max}</strong> losses means{' '}
 <strong className="mono">{N_max} consecutive {mkt.lossLabel}</strong> {mkt.intervalShort}s.
 </p>
@@ -1995,7 +1995,7 @@ const fmt2 = (v) => v?.toFixed(2);
 const fmt3 = (v) => v?.toFixed(3);
 const fmtInt = (v) => v ? Math.round(v).toLocaleString() : '—';
 
-return `You are Marti, an AI co-pilot embedded inside the Marti dashboard - a martingale strategy simulator. You answer questions for Pete Sarubbi (an attorney exploring this strategy) and Anthony DellaPia (the strategy architect).
+return `You are Marti, an AI co-pilot embedded inside the Marti dashboard — a simulator for a doubling-based cost averaging methodology applied to prediction markets. (Structurally similar to martingale in form, but applied to outcomes with dynamic underlying probabilities — not pure martingale like roulette.) You answer questions for Pete Sarubbi (an attorney exploring this strategy) and Anthony DellaPia (the strategy architect).
 
 CURRENT STATE SNAPSHOT - use these exact numbers in every response:
 
@@ -2563,7 +2563,7 @@ exportState={exportState}
     <ParamControl label={<>b₀ <Hint term="Base bet">The first bet at the start of each sequence. Doubled (×m) after each loss until win or cap.</Hint></>} hint="Base bet">
       <NumberField value={b0} onCommit={setB0} defaultValue={5} min={1} step={1} integer ariaLabel="Base bet" />
     </ParamControl>
-    <ParamControl label={<>m <Hint term="Multiplier">Factor by which the bet is multiplied after each loss. 2× is classic Martingale; lower values grow exposure more slowly.</Hint></>} hint="Multiplier">
+    <ParamControl label={<>m <Hint term="Multiplier">Factor by which the bet is multiplied after an adverse outcome. The classic doubling methodology uses 2× (each commitment doubles); lower values grow exposure more slowly.</Hint></>} hint="Multiplier">
       <NumberField value={m} onCommit={setM} defaultValue={2} min={1.1} max={5} step={0.1} ariaLabel="Multiplier" />
     </ParamControl>
     <ParamControl label={<>N <Hint term="N_max (cap)">Max consecutive losses before the bot gives up on a sequence and accepts the cumulative loss. Caps tail risk at the cost of conceding some sequences.</Hint></>} hint="Max steps">
@@ -3308,9 +3308,9 @@ return (
 
 // v9 Phase 5: copy reflects each market's bet direction (set on MARKETS[*].direction)
 const PLAIN_WHAT_IM_DOING = {
-  btc15: "You're using a Martingale strategy on Bitcoin 15-minute price changes. The bot bets on whether Bitcoin goes UP each 15 minutes. If you lose, you double your bet next time. If you win, you start over.",
-  spx1h: "You're using a Martingale strategy on S&P 500 hourly direction. The bot bets on whether the market goes UP each hour. If you lose, you double your bet next hour.",
-  mlb: "You're betting on whether each MLB inning has NO runs scored. (Innings score only ~28% of the time, so 'no score' is the dominant side.) If your bet wins, you start over. If it loses, you double your bet next inning.",
+  btc15: "Marti applies a doubling-based cost averaging methodology to Bitcoin 15-minute price direction. The bot commits a base amount on UP each 15 minutes. After an adverse outcome, the next commitment doubles to recover prior commitments plus the base. On a winning outcome, it returns to baseline plus the base.",
+  spx1h: "Marti applies a doubling-based cost averaging methodology to S&P 500 hourly direction. The bot commits a base amount on UP each hour. After an adverse outcome, the next commitment doubles to recover prior commitments plus the base.",
+  mlb: "Marti applies a doubling-based cost averaging methodology to MLB innings. The bot commits a base amount on NO runs scored each inning. (Innings score only ~28% of the time, so 'no score' is the dominant side.) After an adverse outcome, the next commitment doubles to recover prior commitments plus the base.",
   custom: "You're running a simulation with a custom win probability. This is NOT real market data.",
 };
 
@@ -3330,7 +3330,7 @@ function PlainEnglishCard({ results, outcomes, market, dataInfo, period, isStale
 
   const mkt = MARKETS.find(x => x.id === market);
   const mktLabel = mkt ? mkt.label : market;
-  const whatImDoing = PLAIN_WHAT_IM_DOING[market] || `You're running a Martingale strategy on ${mktLabel}.`;
+  const whatImDoing = PLAIN_WHAT_IM_DOING[market] || `Marti applies a doubling-based cost averaging methodology to ${mktLabel}.`;
 
   const stats = computeStreaks(outcomes);
   const { n } = stats;
@@ -3374,6 +3374,7 @@ function PlainEnglishCard({ results, outcomes, market, dataInfo, period, isStale
             Showing data from {dataInfo.market.toUpperCase()}, not current selection
           </span>
         )}
+        <span className="mb-plain-warn-chip mono">doubling commitments · cost averaging methodology</span>
         <span className="mb-plain-warn-chip mono">{odds >= 0 ? '+' : ''}{odds} odds · wins pay {payoutMultiplier(odds).toFixed(2)}× bet</span>
       </div>
 
@@ -3566,7 +3567,9 @@ function GuidedScreen1({ onNext, onSkipToExpert }) {
       </button>
       {open && (
         <div className="mb-guided-disclosure-body">
-          <p>Marti uses a "doubling-bet" strategy called <strong>martingale</strong>. You bet a small amount. If you lose, you double your bet next time. Keep doubling until you win — then you recover all losses plus your starting bet. The risk: if you keep losing too many times in a row, the bets get huge fast. Marti tests this strategy against real market data (Bitcoin, MLB, stocks) to see if it would actually work for your bankroll.</p>
+          <p>Marti is a <strong>doubling-based cost averaging methodology</strong> for prediction markets. You commit a base amount on a binary outcome (Bitcoin up/down, MLB inning score/no-score, stocks). When the outcome goes against you, the next commitment doubles to recover prior commitments plus the base. When right, you return to baseline plus your base.</p>
+          <p>Unlike pure martingale (like roulette, where odds stay static 50/50 every spin), this strategy works because prediction markets give you a forum for binary outcomes on events with real underlying trajectory. The doubling pattern is structurally similar, but the underlying probabilities aren't static like a roulette wheel.</p>
+          <p>Marti tests this methodology against real market data to see if it would actually work for your working capital.</p>
           <div className="mb-guided-ladder">
             {[
               { v: '$5', tone: 'gold' },
@@ -3582,7 +3585,7 @@ function GuidedScreen1({ onNext, onSkipToExpert }) {
               </React.Fragment>
             ))}
           </div>
-          <p className="mb-guided-ladder-cap mono dim">starts at $5 · caps at $160 after 6 losses</p>
+          <p className="mb-guided-ladder-cap mono dim">successive commitments · starts at $5 · capped at $160 after 6 consecutive adverse outcomes</p>
         </div>
       )}
       <label className="mb-guided-skip">
@@ -4776,7 +4779,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
               value={bankrollM}
               onChange={e => setBankrollM(parseFloat(e.target.value))}
               className="mb-slider"
-              aria-label="Martingale multiplier"
+              aria-label="Doubling multiplier"
             />
           </div>
           <div className="mb-streak-funding-row">
@@ -4812,7 +4815,7 @@ function StreaksView({ outcomes, market, dataInfo, isStale }) {
             <div className="mb-streak-scenario-title">Capped strategy (N_max = {bankrollNMax})</div>
             <div className="mb-streak-scenario-kpis">
               <div className="mb-kpi mb-kpi-primary">
-                <div className="mb-kpi-label">Per-sequence max loss <Hint term="Per-sequence max loss">Total dollars lost if a single Martingale ladder reaches N_max consecutive losses: B × (m^N_max − 1)/(m − 1).</Hint></div>
+                <div className="mb-kpi-label">Per-sequence max loss <Hint term="Per-sequence max loss">Total dollars lost if a single doubling ladder reaches N_max consecutive adverse outcomes: B × (m^N_max − 1)/(m − 1).</Hint></div>
                 <div className="mb-kpi-value mono gold">{fmtBankroll(funding.perSeqMaxLoss)}</div>
               </div>
               <div className="mb-kpi">
